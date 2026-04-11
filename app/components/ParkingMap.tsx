@@ -2,9 +2,11 @@
 
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import type { FeatureCollection, MultiPolygon, Polygon } from "geojson";
+import type { Session } from "@supabase/supabase-js";
 import mapboxgl from "mapbox-gl";
 import useCampusProximity from "../hooks/useCampusProximity";
 import { CAMPUS_RADIUS_METERS } from "../lib/geo";
+import { getSupabaseBrowserClient } from "../lib/supabaseBrowser";
 import "mapbox-gl/dist/mapbox-gl.css";
 
 type LngLatTuple = [number, number];
@@ -18,6 +20,9 @@ type ParkingReport = {
     note: string;
     distanceToCampusMeters: number;
     createdAt: string;
+    userId: string | null;
+    reporterName: string;
+    reporterPoints: number;
 };
 
 type ReportsResponse = {
@@ -85,9 +90,36 @@ const formatAvailabilityLabel = (availability: ParkingAvailability): string => {
     return "Full";
 };
 
+const getSessionDisplayName = (session: Session | null): string => {
+    if (!session?.user) {
+        return "";
+    }
+
+    const fullName =
+        typeof session.user.user_metadata?.full_name === "string"
+            ? session.user.user_metadata.full_name.trim()
+            : typeof session.user.user_metadata?.name === "string"
+              ? session.user.user_metadata.name.trim()
+              : "";
+
+    if (fullName) {
+        return fullName;
+    }
+
+    const email = session.user.email ?? "";
+    const prefix = email.split("@")[0]?.trim();
+    return prefix || "Unknown user";
+};
+
 export default function ParkingMap() {
     const mapContainerRef = useRef<HTMLDivElement | null>(null);
     const mapRef = useRef<mapboxgl.Map | null>(null);
+
+    const [session, setSession] = useState<Session | null>(null);
+    const [isAuthReady, setIsAuthReady] = useState<boolean>(false);
+    const [authFeedback, setAuthFeedback] = useState<string>("");
+    const [isStartingGoogleSignIn, setIsStartingGoogleSignIn] = useState<boolean>(false);
+    const [isSigningOut, setIsSigningOut] = useState<boolean>(false);
 
     const [lotName, setLotName] = useState<string>("");
     const [availability, setAvailability] = useState<ParkingAvailability>("limited");
@@ -101,14 +133,107 @@ export default function ParkingMap() {
 
     const { isNearCampus, distanceToCampus, locationError } = useCampusProximity();
 
+    const sessionDisplayName = useMemo(() => getSessionDisplayName(session), [session]);
+
     const canSubmitReport = useMemo(
-        () => isNearCampus && !locationError && !isSubmittingReport,
-        [isNearCampus, locationError, isSubmittingReport],
+        () => Boolean(session?.access_token) && isNearCampus && !locationError && !isSubmittingReport,
+        [session, isNearCampus, locationError, isSubmittingReport],
     );
+
+    const handleGoogleSignIn = async (): Promise<void> => {
+        setAuthFeedback("");
+        setIsStartingGoogleSignIn(true);
+
+        try {
+            const supabase = getSupabaseBrowserClient();
+            const { error } = await supabase.auth.signInWithOAuth({
+                provider: "google",
+                options: {
+                    redirectTo: window.location.origin,
+                },
+            });
+
+            if (error) {
+                setAuthFeedback(error.message || "Google sign-in failed.");
+                setIsStartingGoogleSignIn(false);
+            }
+        } catch {
+            setAuthFeedback("Supabase auth is not configured yet.");
+            setIsStartingGoogleSignIn(false);
+        }
+    };
+
+    const handleSignOut = async (): Promise<void> => {
+        setAuthFeedback("");
+        setIsSigningOut(true);
+
+        try {
+            const supabase = getSupabaseBrowserClient();
+            const { error } = await supabase.auth.signOut();
+
+            if (error) {
+                setAuthFeedback(error.message || "Failed to sign out.");
+            }
+        } catch {
+            setAuthFeedback("Supabase auth is not configured yet.");
+        } finally {
+            setIsSigningOut(false);
+        }
+    };
+
+    useEffect(() => {
+        let isActive = true;
+        let unsubscribe: (() => void) | null = null;
+
+        try {
+            const supabase = getSupabaseBrowserClient();
+
+            void supabase.auth.getSession().then(({ data, error }) => {
+                if (!isActive) {
+                    return;
+                }
+
+                if (error) {
+                    setAuthFeedback(error.message || "Unable to initialize authentication.");
+                }
+
+                setSession(data.session ?? null);
+                setIsAuthReady(true);
+            });
+
+            const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+                if (!isActive) {
+                    return;
+                }
+
+                setSession(nextSession);
+                setIsAuthReady(true);
+            });
+
+            unsubscribe = () => {
+                data.subscription.unsubscribe();
+            };
+        } catch {
+            if (isActive) {
+                setAuthFeedback("Supabase auth is not configured yet.");
+                setIsAuthReady(true);
+            }
+        }
+
+        return () => {
+            isActive = false;
+            unsubscribe?.();
+        };
+    }, []);
 
     const handleReportSubmit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
         event.preventDefault();
         setReportFeedback("");
+
+        if (!session?.access_token) {
+            setReportFeedback("Please sign in with Google before reporting.");
+            return;
+        }
 
         if (locationError) {
             setReportFeedback(locationError);
@@ -139,6 +264,7 @@ export default function ParkingMap() {
                 method: "POST",
                 headers: {
                     "content-type": "application/json",
+                    authorization: `Bearer ${session.access_token}`,
                 },
                 body: JSON.stringify({
                     lotName: normalizedLotName,
@@ -314,6 +440,38 @@ export default function ParkingMap() {
 
             <aside className="absolute left-3 top-3 z-10 max-h-[calc(100dvh-1.5rem)] w-[min(380px,calc(100vw-1.5rem))] overflow-auto rounded-2xl border border-slate-300/80 bg-white/92 p-4 shadow-xl backdrop-blur-sm">
                 <h2 className="text-lg font-semibold text-slate-900">JACPark Reporting</h2>
+
+                <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                    <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-700">Account</h3>
+                    {isAuthReady ? (
+                        session ? (
+                            <p className="mt-1 text-xs text-slate-700">
+                                Signed in as <span className="font-semibold">{sessionDisplayName}</span>
+                            </p>
+                        ) : (
+                            <p className="mt-1 text-xs text-slate-700">Sign in with Google to submit reports.</p>
+                        )
+                    ) : (
+                        <p className="mt-1 text-xs text-slate-700">Checking session...</p>
+                    )}
+
+                    <button
+                        type="button"
+                        onClick={session ? handleSignOut : handleGoogleSignIn}
+                        disabled={isStartingGoogleSignIn || isSigningOut}
+                        className="mt-2 w-full rounded-lg bg-slate-800 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                        {session
+                            ? isSigningOut
+                                ? "Signing out..."
+                                : "Sign out"
+                            : isStartingGoogleSignIn
+                              ? "Redirecting to Google..."
+                              : "Sign in with Google"}
+                    </button>
+                    {authFeedback ? <p className="mt-2 text-xs font-medium text-red-700">{authFeedback}</p> : null}
+                </div>
+
                 <p className="mt-1 text-xs text-slate-600">
                     Distance to campus center: <span className="font-semibold">{formatDistance(distanceToCampus)}</span>
                 </p>
@@ -401,6 +559,10 @@ export default function ParkingMap() {
                                         {formatAvailabilityLabel(report.availability)} •{" "}
                                         {new Date(report.createdAt).toLocaleTimeString()} •{" "}
                                         {formatDistance(report.distanceToCampusMeters)}
+                                    </p>
+                                    <p className="text-xs text-slate-600">
+                                        by <span className="font-semibold">{report.reporterName}</span> • {report.reporterPoints}{" "}
+                                        pts
                                     </p>
                                     {report.note ? <p className="mt-1 text-xs text-slate-700">{report.note}</p> : null}
                                 </li>

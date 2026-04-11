@@ -9,16 +9,34 @@ Add these in `.env.local`:
 ```bash
 NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN=your_mapbox_public_token
 NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
 SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key
 ```
 
+## Google OAuth setup
+
+In Supabase dashboard:
+
+1. Open Authentication -> Providers -> Google.
+2. Enable Google provider.
+3. Add your Google OAuth client ID and secret.
+4. Add redirect URL:
+    - `http://localhost:3000`
+    - your production URL when deployed.
+
 ## Postgres setup
 
-Run the SQL migration in your Supabase Postgres database:
+Run both SQL migrations in your Supabase Postgres database:
 
 - `supabase/migrations/20260411_create_parking_reports.sql`
+- `supabase/migrations/20260411_add_profiles_and_user_reports.sql`
 
-This creates the `parking_reports` table and indexes used by `app/api/reports/route.ts`.
+This creates:
+
+- `parking_reports`
+- `profiles` (name + points)
+- automatic profile creation for new auth users
+- automatic point increment when a report is submitted
 
 ## Hardcoded parking boundary
 
