@@ -18,6 +18,8 @@ type ParkingReportRow = {
     distance_to_campus_meters: number;
     created_at: string;
     user_id: string | null;
+    reporter_latitude: number;
+    reporter_longitude: number;
 };
 
 type ApiReport = {
@@ -29,6 +31,8 @@ type ApiReport = {
     note: string;
     distanceToCampusMeters: number;
     createdAt: string;
+    reporterLatitude: number;
+    reporterLongitude: number;
 };
 
 type ViewerParkingState = {
@@ -38,7 +42,7 @@ type ViewerParkingState = {
 };
 
 const REPORT_COLUMNS =
-    "id, lot_name, availability, action_type, fullness_level, note, distance_to_campus_meters, created_at, user_id";
+    "id, lot_name, availability, action_type, fullness_level, note, distance_to_campus_meters, created_at, user_id, reporter_latitude, reporter_longitude";
 
 const allowedActionTypes: ReadonlySet<ReportActionType> = new Set(["parked", "leaving", "observing"]);
 const OBSERVING_COOLDOWN_MS = 60 * 60 * 1000;
@@ -116,6 +120,8 @@ const toApiReport = (row: ParkingReportRow): ApiReport => {
         note: row.note ?? "",
         distanceToCampusMeters: row.distance_to_campus_meters,
         createdAt: row.created_at,
+        reporterLatitude: row.reporter_latitude,
+        reporterLongitude: row.reporter_longitude,
     };
 };
 

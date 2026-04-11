@@ -28,6 +28,8 @@ type ParkingReport = {
     note: string;
     distanceToCampusMeters: number;
     createdAt: string;
+    reporterLatitude: number;
+    reporterLongitude: number;
 };
 
 type ViewerParkingState = {
@@ -56,6 +58,9 @@ const BOUNDARY_SOURCE_ID = "parking-boundary-source";
 const BOUNDARY_FILL_LAYER_ID = "parking-boundary-fill";
 const BOUNDARY_LINE_LAYER_ID = "parking-boundary-line";
 const BOUNDARY_GEOJSON_PATH = "/boundaries/jac-parking-boundaries.geojson";
+const REPORTS_HEATMAP_SOURCE_ID = "parking-reports-heatmap";
+const REPORTS_HEATMAP_LAYER_ID = "parking-reports-heatmap-layer";
+const REPORTS_HEATMAP_POINTS_LAYER_ID = "parking-reports-points-layer";
 const LATEST_UPDATE_LIMIT = 1;
 const REPORTS_REFRESH_INTERVAL_MS = 90000;
 const SUBMIT_RETRY_BASE_DELAY_MS = 400;
@@ -229,6 +234,7 @@ const buildOptimisticReport = (
     actionType: ReportActionType,
     fullnessLevel: number,
     distanceToCampusMeters: number,
+    reporterLocation: LatLng,
 ): ParkingReport => ({
     id: `optimistic-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     lotName: "John Abbott Parking",
@@ -237,6 +243,8 @@ const buildOptimisticReport = (
     fullnessLevel,
     note: "",
     distanceToCampusMeters,
+    reporterLatitude: reporterLocation.latitude,
+    reporterLongitude: reporterLocation.longitude,
     createdAt: new Date().toISOString(),
 });
 
@@ -439,6 +447,96 @@ export default function ParkingMap() {
         return isActionDisabledForParkState(selectedAction, isUserParkedToday);
     }, [selectedAction, isUserParkedToday]);
 
+    // Memoized heatmap data: Filter reports, compute weights, and create GeoJSON
+    const heatmapData = useMemo(() => {
+        const now = new Date().getTime();
+        const DECAY_HOURS = 2; // Data older than 2 hours loses weight
+        const DECAY_MS = DECAY_HOURS * 60 * 60 * 1000;
+        const AGGREGATION_RADIUS_METERS = 35;
+
+        // Filter reports: must have coordinates and not be optimistic
+        const validReports = reports.filter(
+            (r) =>
+                !r.id.startsWith("optimistic-") &&
+                Number.isFinite(r.reporterLatitude) &&
+                Number.isFinite(r.reporterLongitude),
+        );
+
+        if (validReports.length === 0) {
+            return { type: "FeatureCollection" as const, features: [] };
+        }
+
+        // Convert to weighted points
+        const points: Array<{
+            longitude: number;
+            latitude: number;
+            weight: number;
+            timestamp: string;
+        }> = validReports.map((report) => {
+            const timeSinceReportMs = now - new Date(report.createdAt).getTime();
+            const decayFactor = Math.max(0.1, 1 - timeSinceReportMs / DECAY_MS);
+
+            const intensityWeight =
+                report.availability === "full" ? 1.0 : report.availability === "limited" ? 0.6 : 0.3;
+
+            return {
+                longitude: report.reporterLongitude,
+                latitude: report.reporterLatitude,
+                weight: intensityWeight * decayFactor,
+                timestamp: report.createdAt,
+            };
+        });
+
+        // Aggregation: cluster nearby points within radius
+        const aggregated: typeof points = [];
+        const processed = new Set<number>();
+
+        for (let i = 0; i < points.length; i++) {
+            if (processed.has(i)) continue;
+
+            const point = points[i];
+            let totalWeight = point.weight;
+            let count = 1;
+
+            for (let j = i + 1; j < points.length; j++) {
+                if (processed.has(j)) continue;
+
+                const otherPoint = points[j];
+                const latDiff = otherPoint.latitude - point.latitude;
+                const lngDiff = otherPoint.longitude - point.longitude;
+                const distMeters = Math.sqrt(latDiff * latDiff + lngDiff * lngDiff) * 111000; // rough conversion
+
+                if (distMeters <= AGGREGATION_RADIUS_METERS) {
+                    processed.add(j);
+                    totalWeight += otherPoint.weight;
+                    count++;
+                }
+            }
+
+            processed.add(i);
+            aggregated.push({
+                ...point,
+                weight: Math.min(1, totalWeight / count),
+            });
+        }
+
+        // Convert to GeoJSON
+        return {
+            type: "FeatureCollection" as const,
+            features: aggregated.map((pt) => ({
+                type: "Feature" as const,
+                geometry: {
+                    type: "Point" as const,
+                    coordinates: [pt.longitude, pt.latitude] as [number, number],
+                },
+                properties: {
+                    weight: pt.weight,
+                    timestamp: pt.timestamp,
+                },
+            })),
+        };
+    }, [reports]);
+
     useEffect(() => {
         return () => {
             if (latestTransitionFrameRef.current !== null) {
@@ -589,19 +687,6 @@ export default function ParkingMap() {
         const previousReportsSnapshot = reports;
         const previousParkState = isUserParkedToday;
 
-        const optimisticReport = buildOptimisticReport(actionToSubmit, fullnessToSubmit, distanceToCampus);
-
-        setReports((prevReports) => {
-            const nonOptimisticReports = prevReports.filter((report) => !report.id.startsWith("optimistic-"));
-            return [optimisticReport, ...nonOptimisticReports].slice(0, LATEST_UPDATE_LIMIT);
-        });
-
-        if (actionToSubmit === "parked") {
-            setIsUserParkedToday(true);
-        } else if (actionToSubmit === "leaving") {
-            setIsUserParkedToday(false);
-        }
-
         setSelectedAction(null);
         setFullnessLevel(null);
         setReportFeedback("Sending update...");
@@ -610,6 +695,19 @@ export default function ParkingMap() {
 
         try {
             const reporterLocation = await resolveReporterLocation(currentLocation);
+
+            const optimisticReport = buildOptimisticReport(actionToSubmit, fullnessToSubmit, distanceToCampus, reporterLocation);
+
+            setReports((prevReports) => {
+                const nonOptimisticReports = prevReports.filter((report) => !report.id.startsWith("optimistic-"));
+                return [optimisticReport, ...nonOptimisticReports].slice(0, LATEST_UPDATE_LIMIT);
+            });
+
+            if (actionToSubmit === "parked") {
+                setIsUserParkedToday(true);
+            } else if (actionToSubmit === "leaving") {
+                setIsUserParkedToday(false);
+            }
 
             const { response, payload } = await submitReportWithRetry(
                 session.access_token,
@@ -934,12 +1032,83 @@ export default function ParkingMap() {
         };
     }, [theme]);
 
+    // Manage heatmap layer
+    useEffect(() => {
+        if (!mapRef.current || !mapRef.current.isStyleLoaded()) {
+            return;
+        }
+
+        const map = mapRef.current;
+        const data = heatmapData;
+
+        // Ensure source exists
+        const existingSource = map.getSource(REPORTS_HEATMAP_SOURCE_ID) as mapboxgl.GeoJSONSource | undefined;
+        if (!existingSource) {
+            map.addSource(REPORTS_HEATMAP_SOURCE_ID, {
+                type: "geojson",
+                data,
+            });
+        } else {
+            existingSource.setData(data);
+        }
+
+        // Add heatmap layer if it doesn't exist
+        if (!map.getLayer(REPORTS_HEATMAP_LAYER_ID)) {
+            map.addLayer(
+                {
+                    id: REPORTS_HEATMAP_LAYER_ID,
+                    type: "heatmap",
+                    source: REPORTS_HEATMAP_SOURCE_ID,
+                    paint: {
+                        "heatmap-weight": ["coalesce", ["get", "weight"], 0.4],
+                        "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 10, 1.2, 16, 2, 20, 2.6],
+                        "heatmap-color": [
+                            "interpolate",
+                            ["linear"],
+                            ["heatmap-density"],
+                            0,
+                            "rgba(81, 187, 214, 0)",
+                            0.15,
+                            "#51bbd6",
+                            0.35,
+                            "#f1f075",
+                            0.6,
+                            "#f28b36",
+                            1,
+                            "#b41135",
+                        ],
+                        "heatmap-radius": ["interpolate", ["linear"], ["zoom"], 10, 24, 16, 44, 20, 64],
+                        "heatmap-opacity": ["interpolate", ["linear"], ["zoom"], 10, 0.65, 16, 0.95, 20, 0.75],
+                    },
+                },
+                BOUNDARY_FILL_LAYER_ID, // Insert before boundary layer
+            );
+        }
+
+        // Add points layer for sparse data visibility
+        if (!map.getLayer(REPORTS_HEATMAP_POINTS_LAYER_ID)) {
+            map.addLayer(
+                {
+                    id: REPORTS_HEATMAP_POINTS_LAYER_ID,
+                    type: "circle",
+                    source: REPORTS_HEATMAP_SOURCE_ID,
+                    paint: {
+                        "circle-radius": ["interpolate", ["linear"], ["zoom"], 10, 3, 16, 6, 20, 8],
+                        "circle-color": "#ff6600",
+                        "circle-opacity": ["interpolate", ["linear"], ["zoom"], 10, 0.4, 16, 0.5, 20, 0.6],
+                    },
+                },
+                REPORTS_HEATMAP_LAYER_ID,
+            );
+        }
+    }, [heatmapData]);
+
     return (
         <section className="relative h-[100dvh] w-screen overflow-hidden">
             <div ref={mapContainerRef} className="h-full w-full" />
 
             <aside
-                className="absolute left-3 top-3 z-10 max-h-[calc(100dvh-1.5rem)] w-[min(380px,calc(100vw-1.5rem))] overflow-auto rounded-2xl shadow-xl p-4 backdrop-blur-sm"
+                className="absolute left-2 top-2 sm:left-3 sm:top-3 z-10 max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-1.5rem)] w-[calc(100vw-1rem)] sm:w-[min(380px,calc(100vw-1.5rem))] overflow-auto rounded-xl sm:rounded-2xl shadow-xl p-3 sm:p-4 backdrop-blur-sm"
                 style={{
                     backgroundColor: "var(--surface)",
                     borderColor: "var(--line)",
@@ -947,10 +1116,10 @@ export default function ParkingMap() {
                     color: "var(--foreground)",
                 }}
             >
-                <h2 className="text-lg font-semibold">JACPark Reporting</h2>
+                <h2 className="text-base sm:text-lg font-semibold">JACPark Reporting</h2>
 
                 <div
-                    className="mt-3 rounded-lg p-3"
+                    className="mt-2 sm:mt-3 rounded-lg p-2 sm:p-3"
                     style={{
                         backgroundColor: "var(--surface-strong)",
                         borderColor: "var(--line)",
@@ -962,14 +1131,14 @@ export default function ParkingMap() {
                     </h3>
                     {isAuthReady ? (
                         session ? (
-                            <div className="mt-3 space-y-2">
-                                <p className="text-xs">
+                            <div className="mt-2 sm:mt-3 space-y-2">
+                                <p className="text-xs sm:text-sm">
                                     Signed in as <span className="font-semibold">{sessionDisplayName}</span>
                                 </p>
                                 <button
                                     type="button"
                                     onClick={() => setShowDashboard(!showDashboard)}
-                                    className="w-full rounded-lg px-3 py-2 text-xs font-semibold transition"
+                                    className="w-full rounded-lg px-3 py-2 sm:py-2.5 text-xs sm:text-sm font-semibold transition"
                                     style={{
                                         backgroundColor: "rgba(59, 130, 246, 0.15)",
                                         borderColor: "rgba(59, 130, 246, 0.3)",
@@ -983,33 +1152,30 @@ export default function ParkingMap() {
                                 </button>
                             </div>
                         ) : (
-                            <p className="mt-1 text-xs">Sign in with Google to submit reports.</p>
+                            <p className="mt-1 text-xs sm:text-sm">Sign in with Google to submit reports.</p>
                         )
                     ) : (
-                        <p className="mt-1 text-xs">Checking session...</p>
+                        <p className="mt-1 text-xs sm:text-sm">Checking session...</p>
                     )}
 
                     {authFeedback ? <p className="mt-2 text-xs font-medium text-red-500">{authFeedback}</p> : null}
                 </div>
 
-                <p className="mt-1 text-xs" style={{ color: "var(--muted)" }}>
-                    Distance to campus center:{" "}
-                    <span className="font-semibold" style={{ color: "var(--foreground)" }}>
-                        {formatDistance(distanceToCampus)}
-                    </span>
+                <p className="mt-2 sm:mt-3 text-xs sm:text-sm" style={{ color: "var(--muted)" }}>
+                    Distance to campus: <span className="font-semibold" style={{ color: "var(--foreground)" }}>{formatDistance(distanceToCampus)}</span>
                 </p>
                 <p className={`mt-1 text-xs font-medium ${isNearCampus ? "text-emerald-500" : "text-amber-500"}`}>
                     {isNearCampus
-                        ? "You are within campus proximity and can report."
-                        : `Move within ${CAMPUS_RADIUS_METERS} m to report.`}
+                        ? "✓ You can report"
+                        : `Move within ${CAMPUS_RADIUS_METERS} m`}
                 </p>
                 {locationError ? <p className="mt-1 text-xs font-medium text-red-500">{locationError}</p> : null}
                 {boundaryLoadError ? <p className="mt-1 text-xs font-medium text-red-500">{boundaryLoadError}</p> : null}
 
-                <form className="mt-4 space-y-3" onSubmit={handleReportSubmit}>
+                <form className="mt-3 sm:mt-4 space-y-2 sm:space-y-3" onSubmit={handleReportSubmit}>
                     <div>
                         <label className="text-xs font-semibold uppercase tracking-[0.14em]" style={{ color: "var(--muted)" }}>Quick update</label>
-                        <div className="mt-2 grid grid-cols-1 gap-3">
+                        <div className="mt-2 grid grid-cols-1 gap-2 sm:gap-3">
                             {(Object.keys(REPORT_ACTION_CONFIG) as ReportActionType[]).map((actionType) => {
                                 const isSelected = selectedAction === actionType;
                                 const styleSet = ACTION_CARD_STYLES[actionType];
@@ -1025,7 +1191,7 @@ export default function ParkingMap() {
                                             }
                                         }}
                                         disabled={isActionDisabled}
-                                        className={`rounded-2xl border p-4 text-left transition ${
+                                        className={`rounded-xl sm:rounded-2xl border p-3 sm:p-4 text-left transition min-h-16 sm:min-h-auto ${
                                             isActionDisabled
                                                 ? "cursor-not-allowed border-[var(--line)] bg-[var(--surface-strong)] text-slate-400"
                                                 : isSelected
@@ -1033,20 +1199,20 @@ export default function ParkingMap() {
                                                   : styleSet.idle
                                         }`}
                                     >
-                                        <div className="flex items-start gap-3">
+                                        <div className="flex items-start gap-2 sm:gap-3">
                                             <span
-                                                className={`mt-0.5 inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl ${
+                                                className={`mt-0.5 inline-flex h-8 w-8 sm:h-9 sm:w-9 flex-shrink-0 items-center justify-center rounded-lg sm:rounded-xl text-sm sm:text-base ${
                                                     isActionDisabled ? "bg-[var(--surface-strong)] text-slate-400" : styleSet.iconBg
                                                 }`}
                                             >
                                                 <ActionIcon actionType={actionType} />
                                             </span>
-                                            <span className="min-w-0">
-                                                <span className="block text-[15px] font-semibold leading-tight">
+                                            <span className="min-w-0 flex-1">
+                                                <span className="block text-sm sm:text-[15px] font-semibold leading-tight">
                                                     {REPORT_ACTION_CONFIG[actionType].label}
                                                 </span>
                                                 <span
-                                                    className={`mt-1 block text-xs ${isActionDisabled ? "text-slate-400" : "text-[var(--muted)]"}`}
+                                                    className={`mt-0.5 block text-xs ${isActionDisabled ? "text-slate-400" : "text-[var(--muted)]"}`}
                                                 >
                                                     {REPORT_ACTION_CONFIG[actionType].description}
                                                 </span>
@@ -1056,18 +1222,18 @@ export default function ParkingMap() {
                                 );
                             })}
                         </div>
-                        <p className="mt-2 text-[11px]" style={{ color: "var(--muted)" }}>
+                        <p className="mt-2 text-[10px] sm:text-[11px] leading-tight" style={{ color: "var(--muted)" }}>
                             {isUserParkedToday
-                                ? "Status: you are marked as parked for today, so leaving is the next expected action."
-                                : "Status: you are not marked as parked today. If your last park was yesterday, we assume you already left."}
+                                ? "Status: you are marked as parked"
+                                : "Status: you are not marked as parked"}
                         </p>
                     </div>
 
-                    <div className="rounded-2xl border p-3" style={{ borderColor: "var(--line)", backgroundColor: "var(--surface)" }}>
+                    <div className="rounded-xl sm:rounded-2xl border p-3 sm:p-3" style={{ borderColor: "var(--line)", backgroundColor: "var(--surface)" }}>
                         <label className="text-xs font-semibold uppercase tracking-[0.14em]" style={{ color: "var(--muted)" }}>Fullness</label>
 
-                        <div className="mt-3">
-                            <div className="grid grid-cols-5 gap-2">
+                        <div className="mt-2 sm:mt-3">
+                            <div className="grid grid-cols-5 gap-1.5 sm:gap-2">
                                 {[1, 2, 3, 4, 5].map((level) => {
                                     const isSelected = fullnessLevel === level;
                                     const styleSet = FULLNESS_BUTTON_STYLES[level];
@@ -1077,30 +1243,29 @@ export default function ParkingMap() {
                                             key={level}
                                             type="button"
                                             onClick={() => setFullnessLevel(level)}
-                                            className={`rounded-xl border px-2 py-2 text-center text-xs font-semibold transition ${
+                                            className={`rounded-lg border px-1.5 py-2 sm:px-2 sm:py-2 text-center text-[10px] sm:text-xs font-semibold transition min-h-12 sm:min-h-auto ${
                                                 isSelected ? styleSet.selected : styleSet.idle
                                             }`}
                                             aria-label={`Select fullness level ${level}`}
                                         >
-                                            <span className="mx-auto mb-1 flex justify-center">
+                                            <span className="mx-auto mb-1 flex justify-center text-base sm:text-lg">
                                                 <FullnessIcon level={level} selected={isSelected} />
                                             </span>
-                                            <span className="text-[11px]">{level}</span>
+                                            <span className="text-[9px] sm:text-[11px]">{level}</span>
                                         </button>
                                     );
                                 })}
                             </div>
 
                             <p
-                                className="mt-3 rounded-lg px-2 py-1.5 text-xs"
+                                className="mt-2 sm:mt-3 rounded-lg px-2 py-1.5 text-xs sm:text-sm leading-snug"
                                 style={{ backgroundColor: "var(--surface-strong)", color: "var(--foreground)" }}
                             >
                                 {fullnessLevel === null ? (
-                                    "Select a level from 1 to 5 to submit your update."
+                                    "Select 1-5"
                                 ) : (
                                     <>
-                                        <span className="font-semibold">{fullnessLevel}/5:</span>{" "}
-                                        {FULLNESS_DESCRIPTIONS[fullnessLevel]}
+                                        <span className="font-semibold">{fullnessLevel}/5:</span> {FULLNESS_DESCRIPTIONS[fullnessLevel]}
                                     </>
                                 )}
                             </p>
@@ -1110,75 +1275,75 @@ export default function ParkingMap() {
                     <button
                         type="submit"
                         disabled={!canSubmitReport}
-                        className="w-full rounded-xl bg-gradient-to-r from-sky-600 to-cyan-600 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-sky-500/25 transition hover:from-sky-500 hover:to-cyan-500 disabled:cursor-not-allowed disabled:from-slate-400 disabled:to-slate-400 disabled:shadow-none"
+                        className="w-full rounded-xl sm:rounded-lg bg-gradient-to-r from-sky-600 to-cyan-600 px-3 sm:px-4 py-3 sm:py-3 text-xs sm:text-sm font-semibold text-white shadow-lg shadow-sky-500/25 transition hover:from-sky-500 hover:to-cyan-500 disabled:cursor-not-allowed disabled:from-slate-400 disabled:to-slate-400 disabled:shadow-none min-h-12 sm:min-h-auto"
                     >
                         {isSubmittingReport ? "Submitting..." : "Submit update"}
                     </button>
                 </form>
 
                 {reportFeedback ? (
-                    <p className="mt-2 text-xs font-medium" style={{ color: "var(--foreground)" }}>
+                    <p className="mt-2 sm:mt-3 text-xs sm:text-sm font-medium" style={{ color: "var(--foreground)" }}>
                         {reportFeedback}
                     </p>
                 ) : null}
             </aside>
 
             <section
-                className="absolute bottom-3 right-3 z-10 w-[min(320px,calc(100vw-1.5rem))] rounded-xl p-3 shadow-lg backdrop-blur-sm"
+                className="absolute bottom-2 right-2 sm:bottom-3 sm:right-3 z-10 w-[calc(100vw-1rem)] sm:w-[min(320px,calc(100vw-1.5rem))] rounded-lg sm:rounded-xl p-2.5 sm:p-3 shadow-lg backdrop-blur-sm"
                 style={{
                     borderColor: "var(--line)",
                     borderWidth: "1px",
                     backgroundColor: "var(--surface)",
                 }}
             >
-                <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em]" style={{ color: "var(--muted)" }}>
+                <h3 className="text-[10px] sm:text-[11px] font-semibold uppercase tracking-[0.14em]" style={{ color: "var(--muted)" }}>
                     Latest update
                 </h3>
-                <p className="mt-1 text-[11px]" style={{ color: "var(--muted)" }}>Newest anonymous report for today</p>
-                <p className="text-[10px]" style={{ color: "var(--muted)" }}>Refreshes about every 90 seconds while this tab is active.</p>
+                <p className="mt-0.5 text-[10px] sm:text-[11px]" style={{ color: "var(--muted)" }}>Newest report</p>
+                <p className="text-[9px] sm:text-[10px]" style={{ color: "var(--muted)" }}>Refreshes every ~90s</p>
+                <p className="mt-1 text-[9px] sm:text-[10px]" style={{ color: "var(--muted)" }}>
+                    🔥 Heatmap: <span style={{ color: "var(--foreground)" }}>{heatmapData.features.length}</span>
+                </p>
 
-                {reportsLoadError ? <p className="mt-2 text-[11px] font-medium text-red-700">{reportsLoadError}</p> : null}
+                {reportsLoadError ? <p className="mt-1.5 text-[10px] font-medium text-red-700">{reportsLoadError}</p> : null}
 
                 {isLoadingReports && !latestReport ? (
-                    <p className="mt-2 text-[11px]" style={{ color: "var(--muted)" }}>
-                        Loading updates...
+                    <p className="mt-1.5 text-[10px]" style={{ color: "var(--muted)" }}>
+                        Loading...
                     </p>
                 ) : !latestReport ? (
-                    <p className="mt-2 text-[11px]" style={{ color: "var(--muted)" }}>
-                        No updates shared today yet.
+                    <p className="mt-1.5 text-[10px]" style={{ color: "var(--muted)" }}>
+                        No reports yet
                     </p>
                 ) : (
-                    <div className="relative mt-2 min-h-[3.5rem] overflow-hidden">
+                    <div className="relative mt-1.5 min-h-14 sm:min-h-14 overflow-hidden">
                         {previousReport ? (
                             <article
-                                className={`absolute inset-0 rounded-md px-2 py-1.5 transition-all duration-500 ease-out ${
-                                    isPreviousReportFading ? "-translate-y-3 opacity-0" : "translate-y-0 opacity-100"
+                                className={`absolute inset-0 rounded-md px-2 py-1 transition-all duration-500 ease-out ${
+                                    isPreviousReportFading ? "-translate-y-2 opacity-0" : "translate-y-0 opacity-100"
                                 }`}
                                 style={{ borderColor: "var(--line)", borderWidth: "1px", backgroundColor: "var(--surface-strong)" }}
                             >
-                                <p className="text-[11px] leading-tight" style={{ color: "var(--foreground)" }}>
-                                    {formatPublicUpdateText(previousReport.actionType)} •{" "}
-                                    {formatUpdateTime(previousReport.createdAt)}
+                                <p className="text-[10px] leading-tight" style={{ color: "var(--foreground)" }}>
+                                    {formatPublicUpdateText(previousReport.actionType)} • {formatUpdateTime(previousReport.createdAt)}
                                 </p>
-                                <p className="mt-0.5 text-[10px]" style={{ color: "var(--muted)" }}>
-                                    Fullness {previousReport.fullnessLevel ?? "?"}/5 •{" "}
-                                    {formatAvailabilityLabel(previousReport.availability)}
+                                <p className="mt-0.5 text-[9px]" style={{ color: "var(--muted)" }}>
+                                    {previousReport.fullnessLevel ?? "?"}/5 • {formatAvailabilityLabel(previousReport.availability)}
                                 </p>
                             </article>
                         ) : null}
 
                         <article
-                            className={`relative rounded-md px-2 py-1.5 transition-all duration-300 ease-out ${
-                                isLatestReportEntering ? "translate-y-2 opacity-0" : "translate-y-0 opacity-100"
+                            className={`relative rounded-md px-2 py-1 transition-all duration-300 ease-out ${
+                                isLatestReportEntering ? "translate-y-1.5 opacity-0" : "translate-y-0 opacity-100"
                             }`}
                             style={{ borderColor: "var(--line)", borderWidth: "1px", backgroundColor: "var(--surface-strong)" }}
                         >
-                            <p className="text-[11px] leading-tight" style={{ color: "var(--foreground)" }}>
+                            <p className="text-[10px] leading-tight" style={{ color: "var(--foreground)" }}>
                                 {formatPublicUpdateText(latestReport.actionType)} • {formatUpdateTime(latestReport.createdAt)}
                             </p>
-                            <p className="mt-0.5 text-[10px]" style={{ color: "var(--muted)" }}>
-                                Fullness {latestReport.fullnessLevel ?? "?"}/5 •{" "}
-                                {formatAvailabilityLabel(latestReport.availability)}
+                            <p className="mt-0.5 text-[9px]" style={{ color: "var(--muted)" }}>
+                                {latestReport.fullnessLevel ?? "?"}/5 • {formatAvailabilityLabel(latestReport.availability)}
                             </p>
                         </article>
                     </div>
