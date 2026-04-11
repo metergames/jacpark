@@ -1,6 +1,9 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
+import { getUserRank } from "../lib/leaderboard";
+import { getSupabaseBrowserClient } from "../lib/supabaseBrowser";
 
 interface UserDashboardProps {
     session: Session | null;
@@ -12,6 +15,55 @@ interface UserDashboardProps {
 }
 
 export default function UserDashboard({ session, onSignOut, isSigningOut, onSettingsClick, onLeaderboardClick, onClose }: UserDashboardProps) {
+    const [userPoints, setUserPoints] = useState<number>(0);
+    const [userRank, setUserRank] = useState<number | null>(null);
+    const [userReports, setUserReports] = useState<number>(0);
+
+    useEffect(() => {
+        if (!session?.user?.id) {
+            setUserPoints(0);
+            setUserRank(null);
+            setUserReports(0);
+            return;
+        }
+
+        let isActive = true;
+
+        const loadProfileStats = async () => {
+            try {
+                const rankData = await getUserRank(session.user.id);
+
+                const supabase = getSupabaseBrowserClient();
+                const { count } = await supabase
+                    .from("parking_reports")
+                    .select("id", { count: "exact", head: true })
+                    .eq("user_id", session.user.id);
+
+                if (!isActive) {
+                    return;
+                }
+
+                setUserPoints(rankData?.points ?? 0);
+                setUserRank(rankData?.rank ?? null);
+                setUserReports(count ?? 0);
+            } catch {
+                if (!isActive) {
+                    return;
+                }
+
+                setUserPoints(0);
+                setUserRank(null);
+                setUserReports(0);
+            }
+        };
+
+        void loadProfileStats();
+
+        return () => {
+            isActive = false;
+        };
+    }, [session?.user?.id]);
+
     if (!session?.user) {
         return null;
     }
@@ -20,8 +72,6 @@ export default function UserDashboard({ session, onSignOut, isSigningOut, onSett
         typeof session.user.user_metadata?.full_name === "string"
             ? session.user.user_metadata.full_name
             : session.user.email?.split("@")[0] || "User";
-
-    const userPoints = typeof session.user.user_metadata?.points === "number" ? session.user.user_metadata.points : 0;
 
     return (
         <div className="absolute top-3 right-3 z-10 rounded-2xl shadow-xl p-4 max-w-sm backdrop-blur-sm" style={{
@@ -67,7 +117,7 @@ export default function UserDashboard({ session, onSignOut, isSigningOut, onSett
                     borderWidth: "1px",
                 }}>
                     <p className="text-xs" style={{ color: "var(--muted)" }}>Reports</p>
-                    <p className="text-lg font-semibold text-blue-500">0</p>
+                    <p className="text-lg font-semibold text-blue-500">{userReports}</p>
                 </div>
                 <div className="rounded-lg p-3 text-center" style={{
                     background: "rgba(147, 51, 234, 0.15)",
@@ -75,7 +125,7 @@ export default function UserDashboard({ session, onSignOut, isSigningOut, onSett
                     borderWidth: "1px",
                 }}>
                     <p className="text-xs" style={{ color: "var(--muted)" }}>Rank</p>
-                    <p className="text-lg font-semibold text-purple-500">#1</p>
+                    <p className="text-lg font-semibold text-purple-500">{userRank ? `#${userRank}` : "—"}</p>
                 </div>
             </div>
 

@@ -90,17 +90,17 @@ const FULLNESS_DESCRIPTIONS: Record<number, string> = {
 const ACTION_CARD_STYLES: Record<ReportActionType, { selected: string; idle: string; iconBg: string }> = {
     parked: {
         selected: "border-emerald-500 bg-emerald-50 text-emerald-900 shadow-[0_10px_30px_rgba(16,185,129,0.18)]",
-        idle: "border-emerald-200 bg-white text-slate-900 hover:border-emerald-300 hover:bg-emerald-50/50",
+        idle: "border-emerald-300/70 bg-[var(--surface)] text-[var(--foreground)] hover:border-emerald-400 hover:bg-[var(--surface-strong)]",
         iconBg: "bg-emerald-100 text-emerald-700",
     },
     leaving: {
         selected: "border-orange-500 bg-orange-50 text-orange-900 shadow-[0_10px_30px_rgba(251,146,60,0.2)]",
-        idle: "border-orange-200 bg-white text-slate-900 hover:border-orange-300 hover:bg-orange-50/50",
+        idle: "border-orange-300/70 bg-[var(--surface)] text-[var(--foreground)] hover:border-orange-400 hover:bg-[var(--surface-strong)]",
         iconBg: "bg-orange-100 text-orange-700",
     },
     observing: {
         selected: "border-sky-500 bg-sky-50 text-sky-900 shadow-[0_10px_30px_rgba(14,165,233,0.2)]",
-        idle: "border-sky-200 bg-white text-slate-900 hover:border-sky-300 hover:bg-sky-50/50",
+        idle: "border-sky-300/70 bg-[var(--surface)] text-[var(--foreground)] hover:border-sky-400 hover:bg-[var(--surface-strong)]",
         iconBg: "bg-sky-100 text-sky-700",
     },
 };
@@ -108,23 +108,23 @@ const ACTION_CARD_STYLES: Record<ReportActionType, { selected: string; idle: str
 const FULLNESS_BUTTON_STYLES: Record<number, { selected: string; idle: string }> = {
     1: {
         selected: "border-emerald-500 bg-emerald-50 text-emerald-900",
-        idle: "border-slate-200 bg-white text-slate-700 hover:border-emerald-300",
+        idle: "border-[var(--line)] bg-[var(--surface)] text-[var(--foreground)] hover:border-emerald-400",
     },
     2: {
         selected: "border-lime-500 bg-lime-50 text-lime-900",
-        idle: "border-slate-200 bg-white text-slate-700 hover:border-lime-300",
+        idle: "border-[var(--line)] bg-[var(--surface)] text-[var(--foreground)] hover:border-lime-400",
     },
     3: {
         selected: "border-amber-500 bg-amber-50 text-amber-900",
-        idle: "border-slate-200 bg-white text-slate-700 hover:border-amber-300",
+        idle: "border-[var(--line)] bg-[var(--surface)] text-[var(--foreground)] hover:border-amber-400",
     },
     4: {
         selected: "border-orange-500 bg-orange-50 text-orange-900",
-        idle: "border-slate-200 bg-white text-slate-700 hover:border-orange-300",
+        idle: "border-[var(--line)] bg-[var(--surface)] text-[var(--foreground)] hover:border-orange-400",
     },
     5: {
         selected: "border-rose-500 bg-rose-50 text-rose-900",
-        idle: "border-slate-200 bg-white text-slate-700 hover:border-rose-300",
+        idle: "border-[var(--line)] bg-[var(--surface)] text-[var(--foreground)] hover:border-rose-400",
     },
 };
 
@@ -903,12 +903,13 @@ export default function ParkingMap() {
             return;
         }
 
-        // Determine effective theme based on current HTML class
+        // Determine effective theme: check both theme prop and DOM class for safety
         const isDarkTheme = document.documentElement.classList.contains("dark");
         const newStyle = isDarkTheme ? DARK_STYLE_URL : LIGHT_STYLE_URL;
 
         const map = mapRef.current;
 
+        // Skip if style is already set to avoid unnecessary reloads
         if (mapStyleUrlRef.current === newStyle) {
             return;
         }
@@ -977,10 +978,6 @@ export default function ParkingMap() {
         };
 
         const applyStyle = (): void => {
-            if (mapStyleUrlRef.current === newStyle) {
-                return;
-            }
-
             map.once("style.load", handleStyleLoad);
             map.setStyle(newStyle, {
                 diff: false,
@@ -1076,7 +1073,7 @@ export default function ParkingMap() {
 
                 <form className="mt-4 space-y-3" onSubmit={handleReportSubmit}>
                     <div>
-                        <label className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-600">Quick update</label>
+                        <label className="text-xs font-semibold uppercase tracking-[0.14em]" style={{ color: "var(--muted)" }}>Quick update</label>
                         <div className="mt-2 grid grid-cols-1 gap-3">
                             {(Object.keys(REPORT_ACTION_CONFIG) as ReportActionType[]).map((actionType) => {
                                 const isSelected = selectedAction === actionType;
@@ -1095,7 +1092,7 @@ export default function ParkingMap() {
                                         disabled={isActionDisabled}
                                         className={`rounded-2xl border p-4 text-left transition ${
                                             isActionDisabled
-                                                ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400"
+                                                ? "cursor-not-allowed border-[var(--line)] bg-[var(--surface-strong)] text-slate-400"
                                                 : isSelected
                                                   ? styleSet.selected
                                                   : styleSet.idle
@@ -1104,7 +1101,7 @@ export default function ParkingMap() {
                                         <div className="flex items-start gap-3">
                                             <span
                                                 className={`mt-0.5 inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl ${
-                                                    isActionDisabled ? "bg-slate-200 text-slate-400" : styleSet.iconBg
+                                                    isActionDisabled ? "bg-[var(--surface-strong)] text-slate-400" : styleSet.iconBg
                                                 }`}
                                             >
                                                 <ActionIcon actionType={actionType} />
@@ -1114,9 +1111,7 @@ export default function ParkingMap() {
                                                     {REPORT_ACTION_CONFIG[actionType].label}
                                                 </span>
                                                 <span
-                                                    className={`mt-1 block text-xs ${
-                                                        isActionDisabled ? "text-slate-400" : "text-slate-600"
-                                                    }`}
+                                                    className={`mt-1 block text-xs ${isActionDisabled ? "text-slate-400" : "text-[var(--muted)]"}`}
                                                 >
                                                     {REPORT_ACTION_CONFIG[actionType].description}
                                                 </span>
@@ -1126,15 +1121,15 @@ export default function ParkingMap() {
                                 );
                             })}
                         </div>
-                        <p className="mt-2 text-[11px] text-slate-600">
+                        <p className="mt-2 text-[11px]" style={{ color: "var(--muted)" }}>
                             {isUserParkedToday
                                 ? "Status: you are marked as parked for today, so leaving is the next expected action."
                                 : "Status: you are not marked as parked today. If your last park was yesterday, we assume you already left."}
                         </p>
                     </div>
 
-                    <div className="rounded-2xl border border-slate-200 bg-white p-3">
-                        <label className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-600">Fullness</label>
+                    <div className="rounded-2xl border p-3" style={{ borderColor: "var(--line)", backgroundColor: "var(--surface)" }}>
+                        <label className="text-xs font-semibold uppercase tracking-[0.14em]" style={{ color: "var(--muted)" }}>Fullness</label>
 
                         <div className="mt-3">
                             <div className="grid grid-cols-5 gap-2">
@@ -1161,7 +1156,10 @@ export default function ParkingMap() {
                                 })}
                             </div>
 
-                            <p className="mt-3 rounded-lg bg-slate-50 px-2 py-1.5 text-xs text-slate-700">
+                            <p
+                                className="mt-3 rounded-lg px-2 py-1.5 text-xs"
+                                style={{ backgroundColor: "var(--surface-strong)", color: "var(--foreground)" }}
+                            >
                                 {fullnessLevel === null ? (
                                     "Select a level from 1 to 5 to submit your update."
                                 ) : (
@@ -1183,33 +1181,51 @@ export default function ParkingMap() {
                     </button>
                 </form>
 
-                {reportFeedback ? <p className="mt-2 text-xs font-medium text-slate-700">{reportFeedback}</p> : null}
+                {reportFeedback ? (
+                    <p className="mt-2 text-xs font-medium" style={{ color: "var(--foreground)" }}>
+                        {reportFeedback}
+                    </p>
+                ) : null}
             </aside>
 
-            <section className="absolute bottom-3 right-3 z-10 w-[min(320px,calc(100vw-1.5rem))] rounded-xl border border-slate-300/80 bg-white/90 p-3 shadow-lg backdrop-blur-sm">
-                <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-600">Latest update</h3>
-                <p className="mt-1 text-[11px] text-slate-500">Newest anonymous report for today</p>
-                <p className="text-[10px] text-slate-400">Refreshes about every 90 seconds while this tab is active.</p>
+            <section
+                className="absolute bottom-3 right-3 z-10 w-[min(320px,calc(100vw-1.5rem))] rounded-xl p-3 shadow-lg backdrop-blur-sm"
+                style={{
+                    borderColor: "var(--line)",
+                    borderWidth: "1px",
+                    backgroundColor: "var(--surface)",
+                }}
+            >
+                <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em]" style={{ color: "var(--muted)" }}>
+                    Latest update
+                </h3>
+                <p className="mt-1 text-[11px]" style={{ color: "var(--muted)" }}>Newest anonymous report for today</p>
+                <p className="text-[10px]" style={{ color: "var(--muted)" }}>Refreshes about every 90 seconds while this tab is active.</p>
 
                 {reportsLoadError ? <p className="mt-2 text-[11px] font-medium text-red-700">{reportsLoadError}</p> : null}
 
                 {isLoadingReports && !latestReport ? (
-                    <p className="mt-2 text-[11px] text-slate-600">Loading updates...</p>
+                    <p className="mt-2 text-[11px]" style={{ color: "var(--muted)" }}>
+                        Loading updates...
+                    </p>
                 ) : !latestReport ? (
-                    <p className="mt-2 text-[11px] text-slate-600">No updates shared today yet.</p>
+                    <p className="mt-2 text-[11px]" style={{ color: "var(--muted)" }}>
+                        No updates shared today yet.
+                    </p>
                 ) : (
                     <div className="relative mt-2 min-h-[3.5rem] overflow-hidden">
                         {previousReport ? (
                             <article
-                                className={`absolute inset-0 rounded-md border border-slate-200 bg-white/75 px-2 py-1.5 transition-all duration-500 ease-out ${
+                                className={`absolute inset-0 rounded-md px-2 py-1.5 transition-all duration-500 ease-out ${
                                     isPreviousReportFading ? "-translate-y-3 opacity-0" : "translate-y-0 opacity-100"
                                 }`}
+                                style={{ borderColor: "var(--line)", borderWidth: "1px", backgroundColor: "var(--surface-strong)" }}
                             >
-                                <p className="text-[11px] leading-tight text-slate-700">
+                                <p className="text-[11px] leading-tight" style={{ color: "var(--foreground)" }}>
                                     {formatPublicUpdateText(previousReport.actionType)} •{" "}
                                     {formatUpdateTime(previousReport.createdAt)}
                                 </p>
-                                <p className="mt-0.5 text-[10px] text-slate-500">
+                                <p className="mt-0.5 text-[10px]" style={{ color: "var(--muted)" }}>
                                     Fullness {previousReport.fullnessLevel ?? "?"}/5 •{" "}
                                     {formatAvailabilityLabel(previousReport.availability)}
                                 </p>
@@ -1217,14 +1233,15 @@ export default function ParkingMap() {
                         ) : null}
 
                         <article
-                            className={`relative rounded-md border border-slate-200 bg-white/90 px-2 py-1.5 transition-all duration-300 ease-out ${
+                            className={`relative rounded-md px-2 py-1.5 transition-all duration-300 ease-out ${
                                 isLatestReportEntering ? "translate-y-2 opacity-0" : "translate-y-0 opacity-100"
                             }`}
+                            style={{ borderColor: "var(--line)", borderWidth: "1px", backgroundColor: "var(--surface-strong)" }}
                         >
-                            <p className="text-[11px] leading-tight text-slate-700">
+                            <p className="text-[11px] leading-tight" style={{ color: "var(--foreground)" }}>
                                 {formatPublicUpdateText(latestReport.actionType)} • {formatUpdateTime(latestReport.createdAt)}
                             </p>
-                            <p className="mt-0.5 text-[10px] text-slate-500">
+                            <p className="mt-0.5 text-[10px]" style={{ color: "var(--muted)" }}>
                                 Fullness {latestReport.fullnessLevel ?? "?"}/5 •{" "}
                                 {formatAvailabilityLabel(latestReport.availability)}
                             </p>
