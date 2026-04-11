@@ -31,14 +31,19 @@ Run both SQL migrations in your Supabase Postgres database:
 - `supabase/migrations/20260411_create_parking_reports.sql`
 - `supabase/migrations/20260411_add_profiles_and_user_reports.sql`
 - `supabase/migrations/20260411_add_report_action_and_fullness.sql`
+- `supabase/migrations/20260411_enforce_report_submission_rules.sql`
 
 This creates:
 
 - `parking_reports`
 - `profiles` (name + points)
-- `action_type` + optional `fullness_level` on parking reports
+- `action_type` + required `fullness_level` (1-5) on parking reports
 - automatic profile creation for new auth users
-- automatic point increment when a report is submitted
+- action-based points (`parked` +2, `leaving` +2, `observing` +1)
+- server/database rule checks:
+    - no duplicate `parked` submissions while already parked
+    - `leaving` requires a prior `parked`
+    - `observing` is limited to once per hour per user
 
 ## Hardcoded parking boundary
 

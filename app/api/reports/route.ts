@@ -18,16 +18,6 @@ type ParkingReportRow = {
     distance_to_campus_meters: number;
     created_at: string;
     user_id: string | null;
-    profiles:
-        | {
-              display_name: string | null;
-              points: number | null;
-          }
-        | Array<{
-              display_name: string | null;
-              points: number | null;
-          }>
-        | null;
 };
 
 type ApiReport = {
@@ -39,15 +29,19 @@ type ApiReport = {
     note: string;
     distanceToCampusMeters: number;
     createdAt: string;
-    userId: string | null;
-    reporterName: string;
-    reporterPoints: number;
+};
+
+type ViewerParkingState = {
+    latestActionType: "parked" | "leaving" | null;
+    latestActionAt: string | null;
+    isParkedToday: boolean;
 };
 
 const REPORT_COLUMNS =
-    "id, lot_name, availability, action_type, fullness_level, note, distance_to_campus_meters, created_at, user_id, profiles(display_name, points)";
+    "id, lot_name, availability, action_type, fullness_level, note, distance_to_campus_meters, created_at, user_id";
 
 const allowedActionTypes: ReadonlySet<ReportActionType> = new Set(["parked", "leaving", "observing"]);
+const OBSERVING_COOLDOWN_MS = 60 * 60 * 1000;
 
 const isFiniteNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 
@@ -61,11 +55,25 @@ const parseLimit = (value: string | null): number => {
     return Math.min(Math.max(parsed, 1), 50);
 };
 
-const deriveAvailabilityFromFullness = (fullnessLevel: number | null): ParkingAvailability => {
-    if (fullnessLevel === null) {
-        return "limited";
+const parseSince = (value: string | null): Date => {
+    if (!value) {
+        const fallback = new Date();
+        fallback.setHours(0, 0, 0, 0);
+        return fallback;
     }
 
+    const parsed = new Date(value);
+
+    if (Number.isNaN(parsed.getTime())) {
+        const fallback = new Date();
+        fallback.setHours(0, 0, 0, 0);
+        return fallback;
+    }
+
+    return parsed;
+};
+
+const deriveAvailabilityFromFullness = (fullnessLevel: number): ParkingAvailability => {
     if (fullnessLevel <= 2) {
         return "open";
     }
@@ -98,32 +106,7 @@ const getFallbackDisplayName = (email: string | null): string => {
     return prefix || "Unknown user";
 };
 
-const getProfileFromJoin = (
-    profiles:
-        | {
-              display_name: string | null;
-              points: number | null;
-          }
-        | Array<{
-              display_name: string | null;
-              points: number | null;
-          }>
-        | null,
-): { display_name: string | null; points: number | null } | null => {
-    if (!profiles) {
-        return null;
-    }
-
-    if (Array.isArray(profiles)) {
-        return profiles[0] ?? null;
-    }
-
-    return profiles;
-};
-
 const toApiReport = (row: ParkingReportRow): ApiReport => {
-    const profile = getProfileFromJoin(row.profiles);
-
     return {
         id: row.id,
         lotName: row.lot_name,
@@ -133,14 +116,15 @@ const toApiReport = (row: ParkingReportRow): ApiReport => {
         note: row.note ?? "",
         distanceToCampusMeters: row.distance_to_campus_meters,
         createdAt: row.created_at,
-        userId: row.user_id,
-        reporterName: profile?.display_name?.trim() || "Unknown user",
-        reporterPoints: profile?.points ?? 0,
     };
 };
 
 export async function GET(request: Request) {
-    const limit = parseLimit(new URL(request.url).searchParams.get("limit"));
+    const url = new URL(request.url);
+    const limit = parseLimit(url.searchParams.get("limit"));
+    const since = parseSince(url.searchParams.get("since"));
+    const sinceIso = since.toISOString();
+    const authToken = parseBearerToken(request);
 
     try {
         const supabase = getSupabaseServerClient();
@@ -148,6 +132,7 @@ export async function GET(request: Request) {
         const { data, error } = await supabase
             .from("parking_reports")
             .select(REPORT_COLUMNS)
+            .gte("created_at", sinceIso)
             .order("created_at", { ascending: false })
             .limit(limit);
 
@@ -157,7 +142,40 @@ export async function GET(request: Request) {
 
         const reports = (data as ParkingReportRow[] | null)?.map(toApiReport) ?? [];
 
-        return NextResponse.json({ reports });
+        let viewerParkingState: ViewerParkingState | null = null;
+
+        if (authToken) {
+            const {
+                data: { user },
+                error: authError,
+            } = await supabase.auth.getUser(authToken);
+
+            if (!authError && user) {
+                const { data: latestStateData, error: latestStateError } = await supabase
+                    .from("parking_reports")
+                    .select("action_type, created_at")
+                    .eq("user_id", user.id)
+                    .in("action_type", ["parked", "leaving"])
+                    .order("created_at", { ascending: false })
+                    .limit(1)
+                    .maybeSingle<{ action_type: "parked" | "leaving"; created_at: string }>();
+
+                if (!latestStateError) {
+                    const latestActionType = latestStateData?.action_type ?? null;
+                    const latestActionAt = latestStateData?.created_at ?? null;
+                    const latestActionMs = latestActionAt ? Date.parse(latestActionAt) : NaN;
+
+                    viewerParkingState = {
+                        latestActionType,
+                        latestActionAt,
+                        isParkedToday:
+                            latestActionType === "parked" && !Number.isNaN(latestActionMs) && latestActionMs >= since.getTime(),
+                    };
+                }
+            }
+        }
+
+        return NextResponse.json({ reports, viewerParkingState });
     } catch {
         return NextResponse.json({ error: "Server configuration error." }, { status: 500 });
     }
@@ -184,23 +202,20 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "You must be signed in to submit reports." }, { status: 401 });
     }
 
-    const actionType = reportData.actionType;
+    const actionTypeValue = reportData.actionType;
     const fullnessLevelValue = reportData.fullnessLevel;
     const reporterLatitude = reportData.reporterLatitude;
     const reporterLongitude = reportData.reporterLongitude;
 
-    if (typeof actionType !== "string" || !allowedActionTypes.has(actionType as ReportActionType)) {
+    if (typeof actionTypeValue !== "string" || !allowedActionTypes.has(actionTypeValue as ReportActionType)) {
         return NextResponse.json({ error: "Invalid action type." }, { status: 400 });
     }
 
-    const fullnessLevel =
-        fullnessLevelValue === null || typeof fullnessLevelValue === "undefined"
-            ? null
-            : Number.isInteger(fullnessLevelValue)
-              ? Number(fullnessLevelValue)
-              : NaN;
+    const actionType = actionTypeValue as ReportActionType;
 
-    if (fullnessLevel !== null && (Number.isNaN(fullnessLevel) || fullnessLevel < 1 || fullnessLevel > 5)) {
+    const fullnessLevel = Number.isInteger(fullnessLevelValue) ? Number(fullnessLevelValue) : NaN;
+
+    if (Number.isNaN(fullnessLevel) || fullnessLevel < 1 || fullnessLevel > 5) {
         return NextResponse.json({ error: "Fullness level must be an integer from 1 to 5." }, { status: 400 });
     }
 
@@ -258,6 +273,74 @@ export async function POST(request: Request) {
             },
         );
 
+        const { data: latestStateData, error: latestStateError } = await supabase
+            .from("parking_reports")
+            .select("action_type")
+            .eq("user_id", user.id)
+            .in("action_type", ["parked", "leaving"])
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle<{ action_type: "parked" | "leaving" }>();
+
+        if (latestStateError) {
+            return NextResponse.json({ error: "Failed to validate report state." }, { status: 500 });
+        }
+
+        const latestStateAction = latestStateData?.action_type ?? null;
+
+        if (actionType === "parked" && latestStateAction === "parked") {
+            return NextResponse.json(
+                {
+                    error: "You are already marked as parked. Submit a leaving update before parking again.",
+                },
+                { status: 409 },
+            );
+        }
+
+        if (actionType === "leaving" && latestStateAction !== "parked") {
+            return NextResponse.json(
+                {
+                    error: "You can only submit leaving after you have submitted a parked update.",
+                },
+                { status: 409 },
+            );
+        }
+
+        if (actionType === "observing") {
+            const { data: latestObservingData, error: latestObservingError } = await supabase
+                .from("parking_reports")
+                .select("created_at")
+                .eq("user_id", user.id)
+                .eq("action_type", "observing")
+                .order("created_at", { ascending: false })
+                .limit(1)
+                .maybeSingle<{ created_at: string }>();
+
+            if (latestObservingError) {
+                return NextResponse.json({ error: "Failed to validate observing cooldown." }, { status: 500 });
+            }
+
+            const latestObservingCreatedAt = latestObservingData?.created_at;
+
+            if (latestObservingCreatedAt) {
+                const latestObservingMs = Date.parse(latestObservingCreatedAt);
+
+                if (!Number.isNaN(latestObservingMs)) {
+                    const elapsedMs = Date.now() - latestObservingMs;
+
+                    if (elapsedMs < OBSERVING_COOLDOWN_MS) {
+                        const remainingMinutes = Math.max(1, Math.ceil((OBSERVING_COOLDOWN_MS - elapsedMs) / 60000));
+                        return NextResponse.json(
+                            {
+                                error: `Observing updates are limited to once per hour. Try again in about ${remainingMinutes} minute${remainingMinutes === 1 ? "" : "s"}.`,
+                            },
+                            { status: 429 },
+                        );
+                    }
+                }
+            }
+        }
+
         const { data, error } = await supabase
             .from("parking_reports")
             .insert({
@@ -275,6 +358,35 @@ export async function POST(request: Request) {
             .single();
 
         if (error || !data) {
+            const message = error?.message?.toLowerCase() ?? "";
+
+            if (message.includes("already marked as parked")) {
+                return NextResponse.json(
+                    {
+                        error: "You are already marked as parked. Submit a leaving update before parking again.",
+                    },
+                    { status: 409 },
+                );
+            }
+
+            if (message.includes("leaving requires a prior parked")) {
+                return NextResponse.json(
+                    {
+                        error: "You can only submit leaving after you have submitted a parked update.",
+                    },
+                    { status: 409 },
+                );
+            }
+
+            if (message.includes("once per hour")) {
+                return NextResponse.json(
+                    {
+                        error: "Observing updates are limited to once per hour.",
+                    },
+                    { status: 429 },
+                );
+            }
+
             return NextResponse.json({ error: "Failed to save report." }, { status: 500 });
         }
 
