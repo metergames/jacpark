@@ -1222,28 +1222,35 @@ export default function ParkingMap() {
 
             {/* Floating action buttons (bottom right) - always visible */}
             {isAuthReady && session ? (
-                <div className="fixed bottom-4 sm:bottom-6 right-4 sm:right-6 z-10 flex flex-col gap-2 sm:gap-3">
+                <div className="fixed bottom-6 sm:bottom-6 right-4 sm:right-6 z-10 flex flex-col gap-3 sm:gap-3">
                     {!selectedAction && (
                         <>
                             {(Object.keys(REPORT_ACTION_CONFIG) as ReportActionType[]).map((actionType) => {
                                 const isDisabled = isActionDisabledForParkState(actionType, isUserParkedToday);
-                                const styleSet = ACTION_CARD_STYLES[actionType];
+                                
+                                let bgColor = "#22c55e"; // default green
+                                if (actionType === "parked") bgColor = "#22c55e"; // green for parked
+                                else if (actionType === "leaving") bgColor = "#f97316"; // orange for leaving
+                                else if (actionType === "observing") bgColor = "#0ea5e9"; // blue for observing
+                                
                                 return (
                                     <button
                                         key={actionType}
                                         onClick={() => !isDisabled && setSelectedAction(actionType)}
                                         disabled={isDisabled}
-                                        className="flex items-center justify-center sm:justify-start gap-0 sm:gap-2 px-3 sm:px-4 py-3 sm:py-3 rounded-full sm:rounded-full font-medium text-sm shadow-lg transition"
+                                        className="flex flex-col sm:flex-row items-center justify-center sm:justify-start gap-1.5 sm:gap-2.5 px-4 sm:px-5 py-3.5 sm:py-3 rounded-2xl sm:rounded-full font-semibold text-xs sm:text-sm shadow-xl hover:shadow-2xl transition"
                                         style={{
-                                            backgroundColor: isDisabled ? "var(--surface-strong)" : "white",
-                                            color: isDisabled ? "var(--muted)" : "var(--foreground)",
-                                            opacity: isDisabled ? 0.5 : 1,
-                                            minWidth: "max-content",
+                                            backgroundColor: isDisabled ? "#666" : bgColor,
+                                            color: "white",
+                                            opacity: isDisabled ? 0.4 : 1,
+                                            cursor: isDisabled ? "not-allowed" : "pointer",
+                                            border: "2px solid white",
+                                            boxShadow: "0 4px 12px rgba(0,0,0,0.4)",
                                         }}
                                         title={REPORT_ACTION_CONFIG[actionType].label}
                                     >
-                                        <span className="text-lg sm:text-xl flex-shrink-0"><ActionIcon actionType={actionType} /></span>
-                                        <span className="hidden sm:inline">{REPORT_ACTION_CONFIG[actionType].label}</span>
+                                        <span className="text-2xl sm:text-2xl flex-shrink-0"><ActionIcon actionType={actionType} /></span>
+                                        <span className="text-xs sm:text-sm font-bold leading-tight">{REPORT_ACTION_CONFIG[actionType].label}</span>
                                     </button>
                                 );
                             })}
