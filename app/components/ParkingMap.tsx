@@ -1222,7 +1222,7 @@ export default function ParkingMap() {
 
             {/* Floating action buttons (bottom right) - always visible */}
             {isAuthReady && session ? (
-                <div className="fixed bottom-4 sm:bottom-6 right-4 sm:right-6 z-10 flex flex-col gap-3">
+                <div className="fixed bottom-4 sm:bottom-6 right-4 sm:right-6 z-10 flex flex-col gap-2 sm:gap-3">
                     {!selectedAction && (
                         <>
                             {(Object.keys(REPORT_ACTION_CONFIG) as ReportActionType[]).map((actionType) => {
@@ -1233,15 +1233,17 @@ export default function ParkingMap() {
                                         key={actionType}
                                         onClick={() => !isDisabled && setSelectedAction(actionType)}
                                         disabled={isDisabled}
-                                        className="flex items-center gap-2 px-4 py-3 rounded-full font-medium text-sm shadow-lg transition"
+                                        className="flex items-center justify-center sm:justify-start gap-0 sm:gap-2 px-3 sm:px-4 py-3 sm:py-3 rounded-full sm:rounded-full font-medium text-sm shadow-lg transition"
                                         style={{
                                             backgroundColor: isDisabled ? "var(--surface-strong)" : "white",
                                             color: isDisabled ? "var(--muted)" : "var(--foreground)",
                                             opacity: isDisabled ? 0.5 : 1,
+                                            minWidth: "max-content",
                                         }}
+                                        title={REPORT_ACTION_CONFIG[actionType].label}
                                     >
-                                        <span className="text-lg"><ActionIcon actionType={actionType} /></span>
-                                        {REPORT_ACTION_CONFIG[actionType].label}
+                                        <span className="text-lg sm:text-xl flex-shrink-0"><ActionIcon actionType={actionType} /></span>
+                                        <span className="hidden sm:inline">{REPORT_ACTION_CONFIG[actionType].label}</span>
                                     </button>
                                 );
                             })}
