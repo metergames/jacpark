@@ -1108,7 +1108,7 @@ export default function ParkingMap() {
             <div ref={mapContainerRef} className="h-full w-full" />
 
             <aside
-                className="absolute left-2 top-2 sm:left-3 sm:top-3 z-10 max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-1.5rem)] w-[calc(100vw-1rem)] sm:w-[min(380px,calc(100vw-1.5rem))] overflow-auto rounded-xl sm:rounded-2xl shadow-xl p-3 sm:p-4 backdrop-blur-sm"
+                className="absolute left-2 top-2 sm:left-3 sm:top-3 z-10 max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-1.5rem)] w-[min(280px,calc(100vw-1rem))] sm:w-[min(380px,calc(100vw-1.5rem))] overflow-auto rounded-xl sm:rounded-2xl shadow-xl p-3 sm:p-4 backdrop-blur-sm"
                 style={{
                     backgroundColor: "var(--surface)",
                     borderColor: "var(--line)",
@@ -1116,7 +1116,7 @@ export default function ParkingMap() {
                     color: "var(--foreground)",
                 }}
             >
-                <h2 className="text-base sm:text-lg font-semibold">JACPark Reporting</h2>
+                <h2 className="text-sm sm:text-lg font-semibold truncate">JACPark Reporting</h2>
 
                 <div
                     className="mt-2 sm:mt-3 rounded-lg p-2 sm:p-3"
@@ -1289,7 +1289,7 @@ export default function ParkingMap() {
             </aside>
 
             <section
-                className="absolute bottom-2 right-2 sm:bottom-3 sm:right-3 z-10 w-[calc(100vw-1rem)] sm:w-[min(320px,calc(100vw-1.5rem))] rounded-lg sm:rounded-xl p-2.5 sm:p-3 shadow-lg backdrop-blur-sm"
+                className="absolute bottom-2 right-2 sm:bottom-3 sm:right-3 z-10 w-[min(280px,calc(100vw-1rem))] sm:w-[min(320px,calc(100vw-1.5rem))] rounded-lg sm:rounded-xl p-2.5 sm:p-3 shadow-lg backdrop-blur-sm"
                 style={{
                     borderColor: "var(--line)",
                     borderWidth: "1px",
