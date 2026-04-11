@@ -1,26 +1,67 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+    --background: #090f1b;
+    --foreground: #f2f5fb;
+    --surface: rgba(15, 24, 39, 0.72);
+    --surface-strong: #101a2b;
+    --muted: #98a8bf;
+    --line: rgba(152, 168, 191, 0.28);
+    --accent: #f95a21;
+    --accent-soft: rgba(249, 90, 33, 0.16);
+    --accent-weak: rgba(249, 90, 33, 0.38);
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+    --color-background: var(--background);
+    --color-foreground: var(--foreground);
+    --color-surface: var(--surface);
+    --color-surface-strong: var(--surface-strong);
+    --color-muted: var(--muted);
+    --color-line: var(--line);
+    --color-accent: var(--accent);
+    --font-sans: var(--font-geist-sans);
+    --font-mono: var(--font-geist-mono);
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+    min-height: 100vh;
+    background:
+        radial-gradient(circle at 10% -10%, rgba(249, 90, 33, 0.23), transparent 40%),
+        radial-gradient(circle at 110% 4%, rgba(39, 122, 255, 0.2), transparent 36%), var(--background);
+    color: var(--foreground);
+    font-family: var(--font-geist-sans), "Avenir Next", "Segoe UI", sans-serif;
+}
+
+.jac-bg-grid {
+    background-image:
+        linear-gradient(to right, rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+    background-size: 36px 36px;
+    opacity: 0.28;
+    mask-image: radial-gradient(circle at center, black 35%, transparent 95%);
+}
+
+@keyframes fade-up {
+    from {
+        opacity: 0;
+        transform: translateY(18px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.animate-fade-up {
+    animation: fade-up 0.55s ease-out both;
+}
+
+.animate-fade-up-delay {
+    animation: fade-up 0.55s ease-out 0.12s both;
+}
+
+.animate-fade-up-delay-2 {
+    animation: fade-up 0.55s ease-out 0.2s both;
 }
