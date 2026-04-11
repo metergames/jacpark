@@ -8,8 +8,10 @@ import mapboxgl from "mapbox-gl";
 import useCampusProximity from "../hooks/useCampusProximity";
 import { CAMPUS_RADIUS_METERS } from "../lib/geo";
 import { getSupabaseBrowserClient } from "../lib/supabaseBrowser";
+import { useTheme } from "../lib/ThemeContext";
 import UserDashboard from "./UserDashboard";
 import SettingsModal from "./SettingsModal";
+import LeaderboardModal from "./LeaderboardModal";
 import "mapbox-gl/dist/mapbox-gl.css";
 
 type LngLatTuple = [number, number];
@@ -50,6 +52,7 @@ type BoundaryFeatureCollection = FeatureCollection<Polygon | MultiPolygon>;
 const JOHN_ABBOTT_CENTER: LngLatTuple = [-73.94212693281301, 45.408822013619336];
 const JOHN_ABBOTT_ZOOM = 18;
 const LIGHT_STYLE_URL = "mapbox://styles/mapbox/standard";
+const DARK_STYLE_URL = "mapbox://styles/mapbox/dark-v11";
 const BOUNDARY_SOURCE_ID = "parking-boundary-source";
 const BOUNDARY_FILL_LAYER_ID = "parking-boundary-fill";
 const BOUNDARY_LINE_LAYER_ID = "parking-boundary-line";
@@ -272,8 +275,10 @@ const getSessionDisplayName = (session: Session | null): string => {
 
 export default function ParkingMap() {
     const router = useRouter();
+    const { theme } = useTheme();
     const mapContainerRef = useRef<HTMLDivElement | null>(null);
     const mapRef = useRef<mapboxgl.Map | null>(null);
+    const boundaryDataRef = useRef<BoundaryFeatureCollection | null>(null);
     const latestTransitionFrameRef = useRef<number | null>(null);
     const previousUpdateClearTimeoutRef = useRef<number | null>(null);
 
@@ -283,6 +288,7 @@ export default function ParkingMap() {
     const [isSigningOut, setIsSigningOut] = useState<boolean>(false);
     const [showDashboard, setShowDashboard] = useState<boolean>(false);
     const [showSettings, setShowSettings] = useState<boolean>(false);
+    const [showLeaderboard, setShowLeaderboard] = useState<boolean>(false);
 
     const [selectedAction, setSelectedAction] = useState<ReportActionType | null>(null);
     const [fullnessLevel, setFullnessLevel] = useState<number | null>(null);
@@ -664,9 +670,10 @@ export default function ParkingMap() {
 
         let isActive = true;
 
-        const handleMapLoad = (): void => {
-            const loadHardcodedBoundary = async (): Promise<void> => {
-                try {
+        const addBoundaryLayers = async (): Promise<void> => {
+            try {
+                // Load boundary data if not already cached
+                if (!boundaryDataRef.current) {
                     const boundaryResponse = await fetch(BOUNDARY_GEOJSON_PATH, {
                         method: "GET",
                         cache: "no-store",
@@ -676,52 +683,68 @@ export default function ParkingMap() {
                         throw new Error("Boundary file missing.");
                     }
 
-                    const boundaryData = (await boundaryResponse.json()) as BoundaryFeatureCollection;
-
-                    if (!isActive) {
-                        return;
-                    }
-
-                    if (!map.getSource(BOUNDARY_SOURCE_ID)) {
-                        map.addSource(BOUNDARY_SOURCE_ID, {
-                            type: "geojson",
-                            data: boundaryData,
-                        });
-                    }
-
-                    if (!map.getLayer(BOUNDARY_FILL_LAYER_ID)) {
-                        map.addLayer({
-                            id: BOUNDARY_FILL_LAYER_ID,
-                            type: "fill",
-                            source: BOUNDARY_SOURCE_ID,
-                            paint: {
-                                "fill-color": "#0ea5e9",
-                                "fill-opacity": 0.2,
-                            },
-                        });
-                    }
-
-                    if (!map.getLayer(BOUNDARY_LINE_LAYER_ID)) {
-                        map.addLayer({
-                            id: BOUNDARY_LINE_LAYER_ID,
-                            type: "line",
-                            source: BOUNDARY_SOURCE_ID,
-                            paint: {
-                                "line-color": "#0369a1",
-                                "line-width": 3,
-                            },
-                        });
-                    }
-
-                    setBoundaryLoadError("");
-                } catch {
-                    if (isActive) {
-                        setBoundaryLoadError("Unable to load hardcoded boundary file.");
-                    }
+                    boundaryDataRef.current = (await boundaryResponse.json()) as BoundaryFeatureCollection;
                 }
-            };
 
-            void loadHardcodedBoundary();
+                const boundaryData = boundaryDataRef.current;
+
+                if (!boundaryData) {
+                    throw new Error("Boundary data unavailable.");
+                }
+
+                if (!isActive) {
+                    return;
+                }
+
+                // Add source if it doesn't exist
+                if (!map.getSource(BOUNDARY_SOURCE_ID)) {
+                    map.addSource(BOUNDARY_SOURCE_ID, {
+                        type: "geojson",
+                        data: boundaryData,
+                    });
+                }
+
+                // Guard against style/source race conditions.
+                if (!map.getSource(BOUNDARY_SOURCE_ID)) {
+                    return;
+                }
+
+                // Add fill layer if it doesn't exist
+                if (!map.getLayer(BOUNDARY_FILL_LAYER_ID)) {
+                    map.addLayer({
+                        id: BOUNDARY_FILL_LAYER_ID,
+                        type: "fill",
+                        source: BOUNDARY_SOURCE_ID,
+                        paint: {
+                            "fill-color": "#0ea5e9",
+                            "fill-opacity": 0.2,
+                        },
+                    });
+                }
+
+                // Add line layer if it doesn't exist
+                if (!map.getLayer(BOUNDARY_LINE_LAYER_ID)) {
+                    map.addLayer({
+                        id: BOUNDARY_LINE_LAYER_ID,
+                        type: "line",
+                        source: BOUNDARY_SOURCE_ID,
+                        paint: {
+                            "line-color": "#0369a1",
+                            "line-width": 3,
+                        },
+                    });
+                }
+
+                setBoundaryLoadError("");
+            } catch {
+                if (isActive) {
+                    setBoundaryLoadError("Unable to load hardcoded boundary file.");
+                }
+            }
+        };
+
+        const handleMapLoad = (): void => {
+            void addBoundaryLayers();
         };
 
         map.on("load", handleMapLoad);
@@ -734,49 +757,160 @@ export default function ParkingMap() {
         };
     }, []);
 
+    // Update map style when theme changes
+    useEffect(() => {
+        if (!mapRef.current) {
+            return;
+        }
+
+        // Determine effective theme based on current HTML class
+        const isDarkTheme = document.documentElement.classList.contains("dark");
+        const newStyle = isDarkTheme ? DARK_STYLE_URL : LIGHT_STYLE_URL;
+
+        const map = mapRef.current;
+
+        // Listener for when the new style is loaded
+        const handleStyleLoad = async (): Promise<void> => {
+            // Re-add boundary layers after style change
+            try {
+                if (!boundaryDataRef.current) {
+                    const boundaryResponse = await fetch(BOUNDARY_GEOJSON_PATH, {
+                        method: "GET",
+                        cache: "no-store",
+                    });
+
+                    if (!boundaryResponse.ok) {
+                        throw new Error("Boundary file missing.");
+                    }
+
+                    boundaryDataRef.current = (await boundaryResponse.json()) as BoundaryFeatureCollection;
+                }
+
+                const boundaryData = boundaryDataRef.current;
+
+                if (!boundaryData) {
+                    return;
+                }
+
+                if (!map.getSource(BOUNDARY_SOURCE_ID)) {
+                    map.addSource(BOUNDARY_SOURCE_ID, {
+                        type: "geojson",
+                        data: boundaryData,
+                    });
+                }
+
+                // Never attempt to add layers without a valid source.
+                if (!map.getSource(BOUNDARY_SOURCE_ID)) {
+                    return;
+                }
+
+                if (!map.getLayer(BOUNDARY_FILL_LAYER_ID)) {
+                    map.addLayer({
+                        id: BOUNDARY_FILL_LAYER_ID,
+                        type: "fill",
+                        source: BOUNDARY_SOURCE_ID,
+                        paint: {
+                            "fill-color": "#0ea5e9",
+                            "fill-opacity": 0.2,
+                        },
+                    });
+                }
+
+                if (!map.getLayer(BOUNDARY_LINE_LAYER_ID)) {
+                    map.addLayer({
+                        id: BOUNDARY_LINE_LAYER_ID,
+                        type: "line",
+                        source: BOUNDARY_SOURCE_ID,
+                        paint: {
+                            "line-color": "#0369a1",
+                            "line-width": 3,
+                        },
+                    });
+                }
+            } catch {
+                setBoundaryLoadError("Unable to load hardcoded boundary file.");
+            }
+        };
+
+        map.once("style.load", handleStyleLoad);
+        map.setStyle(newStyle);
+
+        return () => {
+            map.off("style.load", handleStyleLoad);
+        };
+    }, [theme]);
+
     return (
         <section className="relative h-[100dvh] w-screen overflow-hidden">
             <div ref={mapContainerRef} className="h-full w-full" />
 
-            <aside className="absolute left-3 top-3 z-10 max-h-[calc(100dvh-1.5rem)] w-[min(380px,calc(100vw-1.5rem))] overflow-auto rounded-2xl border border-slate-300/80 bg-white/92 p-4 shadow-xl backdrop-blur-sm">
-                <h2 className="text-lg font-semibold text-slate-900">JACPark Reporting</h2>
+            <aside
+                className="absolute left-3 top-3 z-10 max-h-[calc(100dvh-1.5rem)] w-[min(380px,calc(100vw-1.5rem))] overflow-auto rounded-2xl shadow-xl p-4 backdrop-blur-sm"
+                style={{
+                    backgroundColor: "var(--surface)",
+                    borderColor: "var(--line)",
+                    borderWidth: "1px",
+                    color: "var(--foreground)",
+                }}
+            >
+                <h2 className="text-lg font-semibold">JACPark Reporting</h2>
 
-                <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
-                    <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-700">Account</h3>
+                <div
+                    className="mt-3 rounded-lg p-3"
+                    style={{
+                        backgroundColor: "var(--surface-strong)",
+                        borderColor: "var(--line)",
+                        borderWidth: "1px",
+                    }}
+                >
+                    <h3 className="text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--muted)" }}>
+                        Account
+                    </h3>
                     {isAuthReady ? (
                         session ? (
                             <div className="mt-3 space-y-2">
-                                <p className="text-xs text-slate-700">
+                                <p className="text-xs">
                                     Signed in as <span className="font-semibold">{sessionDisplayName}</span>
                                 </p>
                                 <button
                                     type="button"
                                     onClick={() => setShowDashboard(!showDashboard)}
-                                    className="w-full rounded-lg bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-100 transition"
+                                    className="w-full rounded-lg px-3 py-2 text-xs font-semibold transition"
+                                    style={{
+                                        backgroundColor: "rgba(59, 130, 246, 0.15)",
+                                        borderColor: "rgba(59, 130, 246, 0.3)",
+                                        borderWidth: "1px",
+                                        color: "#3b82f6",
+                                    }}
+                                    onMouseEnter={(e) => (e.currentTarget.style.opacity = "0.8")}
+                                    onMouseLeave={(e) => (e.currentTarget.style.opacity = "1")}
                                 >
                                     👤 View Profile
                                 </button>
                             </div>
                         ) : (
-                            <p className="mt-1 text-xs text-slate-700">Sign in with Google to submit reports.</p>
+                            <p className="mt-1 text-xs">Sign in with Google to submit reports.</p>
                         )
                     ) : (
-                        <p className="mt-1 text-xs text-slate-700">Checking session...</p>
+                        <p className="mt-1 text-xs">Checking session...</p>
                     )}
 
-                    {authFeedback ? <p className="mt-2 text-xs font-medium text-red-700">{authFeedback}</p> : null}
+                    {authFeedback ? <p className="mt-2 text-xs font-medium text-red-500">{authFeedback}</p> : null}
                 </div>
 
-                <p className="mt-1 text-xs text-slate-600">
-                    Distance to campus center: <span className="font-semibold">{formatDistance(distanceToCampus)}</span>
+                <p className="mt-1 text-xs" style={{ color: "var(--muted)" }}>
+                    Distance to campus center:{" "}
+                    <span className="font-semibold" style={{ color: "var(--foreground)" }}>
+                        {formatDistance(distanceToCampus)}
+                    </span>
                 </p>
-                <p className={`mt-1 text-xs font-medium ${isNearCampus ? "text-emerald-700" : "text-amber-700"}`}>
+                <p className={`mt-1 text-xs font-medium ${isNearCampus ? "text-emerald-500" : "text-amber-500"}`}>
                     {isNearCampus
                         ? "You are within campus proximity and can report."
                         : `Move within ${CAMPUS_RADIUS_METERS} m to report.`}
                 </p>
-                {locationError ? <p className="mt-1 text-xs font-medium text-red-700">{locationError}</p> : null}
-                {boundaryLoadError ? <p className="mt-1 text-xs font-medium text-red-700">{boundaryLoadError}</p> : null}
+                {locationError ? <p className="mt-1 text-xs font-medium text-red-500">{locationError}</p> : null}
+                {boundaryLoadError ? <p className="mt-1 text-xs font-medium text-red-500">{boundaryLoadError}</p> : null}
 
                 <form className="mt-4 space-y-3" onSubmit={handleReportSubmit}>
                     <div>
@@ -943,11 +1077,14 @@ export default function ParkingMap() {
                     onSignOut={handleSignOut}
                     isSigningOut={isSigningOut}
                     onSettingsClick={() => setShowSettings(true)}
+                    onLeaderboardClick={() => setShowLeaderboard(true)}
                     onClose={() => setShowDashboard(false)}
                 />
             )}
 
             {showSettings && <SettingsModal session={session} onClose={() => setShowSettings(false)} />}
+
+            {showLeaderboard && <LeaderboardModal session={session} onClose={() => setShowLeaderboard(false)} />}
         </section>
     );
 }
