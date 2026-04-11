@@ -1,0 +1,23 @@
+{
+    "type": "FeatureCollection",
+    "features": [
+        {
+            "type": "Feature",
+            "properties": {
+                "name": "John Abbott Parking Perimeter"
+            },
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [
+                    [
+                        [-73.9433172, 45.4077567],
+                        [-73.9401763, 45.4080257],
+                        [-73.9405307, 45.4097837],
+                        [-73.943589, 45.4087361],
+                        [-73.9433172, 45.4077567]
+                    ]
+                ]
+            }
+        }
+    ]
+}

@@ -1,37 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-
-type LatLng = {
-    latitude: number;
-    longitude: number;
-};
-
-const JOHN_ABBOTT_CENTER: LatLng = {
-    latitude: 45.405,
-    longitude: -73.943,
-};
-
-const CAMPUS_RADIUS_METERS = 250;
-const EARTH_RADIUS_METERS = 6371008.8;
-
-const toRadians = (degrees: number): number => (degrees * Math.PI) / 180;
-
-export const haversineDistanceMeters = (from: LatLng, to: LatLng): number => {
-    const lat1 = toRadians(from.latitude);
-    const lat2 = toRadians(to.latitude);
-    const dLat = toRadians(to.latitude - from.latitude);
-    const dLon = toRadians(to.longitude - from.longitude);
-
-    const sinHalfDLat = Math.sin(dLat / 2);
-    const sinHalfDLon = Math.sin(dLon / 2);
-
-    const a = sinHalfDLat * sinHalfDLat + Math.cos(lat1) * Math.cos(lat2) * sinHalfDLon * sinHalfDLon;
-
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-
-    return EARTH_RADIUS_METERS * c;
-};
+import { CAMPUS_RADIUS_METERS, haversineDistanceMeters, JOHN_ABBOTT_CENTER, type LatLng } from "../lib/geo";
 
 type CampusProximityState = {
     isNearCampus: boolean;
