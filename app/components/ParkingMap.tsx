@@ -52,7 +52,6 @@ type BoundaryFeatureCollection = FeatureCollection<Polygon | MultiPolygon>;
 const JOHN_ABBOTT_CENTER: LngLatTuple = [-73.94212693281301, 45.408822013619336];
 const JOHN_ABBOTT_ZOOM = 18;
 const LIGHT_STYLE_URL = "mapbox://styles/mapbox/standard";
-const DARK_STYLE_URL = "mapbox://styles/mapbox/dark-v11";
 const BOUNDARY_SOURCE_ID = "parking-boundary-source";
 const BOUNDARY_FILL_LAYER_ID = "parking-boundary-fill";
 const BOUNDARY_LINE_LAYER_ID = "parking-boundary-line";
@@ -371,6 +370,9 @@ const formatUpdateTime = (isoTime: string): string =>
         minute: "2-digit",
     });
 
+const getMapLightPreset = (): "day" | "night" =>
+    document.documentElement.classList.contains("dark") ? "night" : "day";
+
 const getSessionDisplayName = (session: Session | null): string => {
     if (!session?.user) {
         return "";
@@ -397,7 +399,7 @@ export default function ParkingMap() {
     const { theme } = useTheme();
     const mapContainerRef = useRef<HTMLDivElement | null>(null);
     const mapRef = useRef<mapboxgl.Map | null>(null);
-    const mapStyleUrlRef = useRef<string>(LIGHT_STYLE_URL);
+    const mapLightPresetRef = useRef<"day" | "night">("day");
     const boundaryDataRef = useRef<BoundaryFeatureCollection | null>(null);
     const latestTransitionFrameRef = useRef<number | null>(null);
     const previousUpdateClearTimeoutRef = useRef<number | null>(null);
@@ -795,18 +797,23 @@ export default function ParkingMap() {
 
         (mapboxgl as typeof mapboxgl & { setTelemetryEnabled?: (enabled: boolean) => void }).setTelemetryEnabled?.(false);
 
-        const initialStyle = document.documentElement.classList.contains("dark") ? DARK_STYLE_URL : LIGHT_STYLE_URL;
+        const initialLightPreset = getMapLightPreset();
 
         const map = new mapboxgl.Map({
             container: mapContainerRef.current,
-            style: initialStyle,
+            style: LIGHT_STYLE_URL,
+            config: {
+                basemap: {
+                    lightPreset: initialLightPreset,
+                },
+            },
             center: JOHN_ABBOTT_CENTER,
             zoom: JOHN_ABBOTT_ZOOM,
             attributionControl: false,
         });
 
         mapRef.current = map;
-        mapStyleUrlRef.current = initialStyle;
+        mapLightPresetRef.current = initialLightPreset;
 
         let isActive = true;
 
@@ -903,99 +910,27 @@ export default function ParkingMap() {
             return;
         }
 
-        // Determine effective theme: check both theme prop and DOM class for safety
-        const isDarkTheme = document.documentElement.classList.contains("dark");
-        const newStyle = isDarkTheme ? DARK_STYLE_URL : LIGHT_STYLE_URL;
-
         const map = mapRef.current;
 
-        // Skip if style is already set to avoid unnecessary reloads
-        if (mapStyleUrlRef.current === newStyle) {
-            return;
-        }
+        const applyThemePreset = (): void => {
+            const nextPreset = getMapLightPreset();
 
-        // Listener for when the new style is loaded
-        const handleStyleLoad = async (): Promise<void> => {
-            // Re-add boundary layers after style change
-            try {
-                if (!boundaryDataRef.current) {
-                    const boundaryResponse = await fetch(BOUNDARY_GEOJSON_PATH, {
-                        method: "GET",
-                        cache: "no-store",
-                    });
-
-                    if (!boundaryResponse.ok) {
-                        throw new Error("Boundary file missing.");
-                    }
-
-                    boundaryDataRef.current = (await boundaryResponse.json()) as BoundaryFeatureCollection;
-                }
-
-                const boundaryData = boundaryDataRef.current;
-
-                if (!boundaryData) {
-                    return;
-                }
-
-                if (!map.getSource(BOUNDARY_SOURCE_ID)) {
-                    map.addSource(BOUNDARY_SOURCE_ID, {
-                        type: "geojson",
-                        data: boundaryData,
-                    });
-                }
-
-                // Never attempt to add layers without a valid source.
-                if (!map.getSource(BOUNDARY_SOURCE_ID)) {
-                    return;
-                }
-
-                if (!map.getLayer(BOUNDARY_FILL_LAYER_ID)) {
-                    map.addLayer({
-                        id: BOUNDARY_FILL_LAYER_ID,
-                        type: "fill",
-                        source: BOUNDARY_SOURCE_ID,
-                        paint: {
-                            "fill-color": "#0ea5e9",
-                            "fill-opacity": 0.2,
-                        },
-                    });
-                }
-
-                if (!map.getLayer(BOUNDARY_LINE_LAYER_ID)) {
-                    map.addLayer({
-                        id: BOUNDARY_LINE_LAYER_ID,
-                        type: "line",
-                        source: BOUNDARY_SOURCE_ID,
-                        paint: {
-                            "line-color": "#0369a1",
-                            "line-width": 3,
-                        },
-                    });
-                }
-            } catch {
-                setBoundaryLoadError("Unable to load hardcoded boundary file.");
+            if (mapLightPresetRef.current === nextPreset) {
+                return;
             }
-        };
 
-        const applyStyle = (): void => {
-            map.once("style.load", handleStyleLoad);
-            map.setStyle(newStyle, {
-                diff: false,
-                localFontFamily: "sans-serif",
-                localIdeographFontFamily: "sans-serif",
-            });
-            mapStyleUrlRef.current = newStyle;
+            map.setConfigProperty("basemap", "lightPreset", nextPreset);
+            mapLightPresetRef.current = nextPreset;
         };
 
         if (map.isStyleLoaded()) {
-            applyStyle();
+            applyThemePreset();
         } else {
-            map.once("load", applyStyle);
+            map.once("style.load", applyThemePreset);
         }
 
         return () => {
-            map.off("load", applyStyle);
-            map.off("style.load", handleStyleLoad);
+            map.off("style.load", applyThemePreset);
         };
     }, [theme]);
 
