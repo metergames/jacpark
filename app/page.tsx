@@ -1,5 +1,7 @@
-import ParkingMap from "./components/ParkingMap";
+"use client";
+
+import LandingPage from "./components/LandingPage";
 
 export default function Home() {
-    return <ParkingMap />;
+    return <LandingPage />;
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useRouter } from "next/navigation";
 import type { FeatureCollection, MultiPolygon, Polygon } from "geojson";
 import type { Session } from "@supabase/supabase-js";
 import mapboxgl from "mapbox-gl";
@@ -112,6 +113,7 @@ const getSessionDisplayName = (session: Session | null): string => {
 };
 
 export default function ParkingMap() {
+    const router = useRouter();
     const mapContainerRef = useRef<HTMLDivElement | null>(null);
     const mapRef = useRef<mapboxgl.Map | null>(null);
 
@@ -173,10 +175,14 @@ export default function ParkingMap() {
 
             if (error) {
                 setAuthFeedback(error.message || "Failed to sign out.");
+                setIsSigningOut(false);
+                return;
             }
+
+            // Redirect to home page after successful sign out
+            router.push("/");
         } catch {
             setAuthFeedback("Supabase auth is not configured yet.");
-        } finally {
             setIsSigningOut(false);
         }
     };
