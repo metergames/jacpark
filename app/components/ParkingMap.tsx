@@ -8,8 +8,10 @@ import mapboxgl from "mapbox-gl";
 import useCampusProximity from "../hooks/useCampusProximity";
 import { CAMPUS_RADIUS_METERS } from "../lib/geo";
 import { getSupabaseBrowserClient } from "../lib/supabaseBrowser";
+import { useTheme } from "../lib/ThemeContext";
 import UserDashboard from "./UserDashboard";
 import SettingsModal from "./SettingsModal";
+import LeaderboardModal from "./LeaderboardModal";
 import "mapbox-gl/dist/mapbox-gl.css";
 
 type LngLatTuple = [number, number];
@@ -46,6 +48,7 @@ type BoundaryFeatureCollection = FeatureCollection<Polygon | MultiPolygon>;
 const JOHN_ABBOTT_CENTER: LngLatTuple = [-73.94212693281301, 45.408822013619336];
 const JOHN_ABBOTT_ZOOM = 18;
 const LIGHT_STYLE_URL = "mapbox://styles/mapbox/standard";
+const DARK_STYLE_URL = "mapbox://styles/mapbox/dark-v11";
 const BOUNDARY_SOURCE_ID = "parking-boundary-source";
 const BOUNDARY_FILL_LAYER_ID = "parking-boundary-fill";
 const BOUNDARY_LINE_LAYER_ID = "parking-boundary-line";
@@ -144,8 +147,10 @@ const getSessionDisplayName = (session: Session | null): string => {
 
 export default function ParkingMap() {
     const router = useRouter();
+    const { theme } = useTheme();
     const mapContainerRef = useRef<HTMLDivElement | null>(null);
     const mapRef = useRef<mapboxgl.Map | null>(null);
+    const boundaryDataRef = useRef<BoundaryFeatureCollection | null>(null);
 
     const [session, setSession] = useState<Session | null>(null);
     const [isAuthReady, setIsAuthReady] = useState<boolean>(false);
@@ -154,6 +159,7 @@ export default function ParkingMap() {
     const [isSigningOut, setIsSigningOut] = useState<boolean>(false);
     const [showDashboard, setShowDashboard] = useState<boolean>(false);
     const [showSettings, setShowSettings] = useState<boolean>(false);
+    const [showLeaderboard, setShowLeaderboard] = useState<boolean>(false);
 
     const [selectedAction, setSelectedAction] = useState<ReportActionType | null>(null);
     const [includeFullnessEstimate, setIncludeFullnessEstimate] = useState<boolean>(false);
@@ -398,9 +404,10 @@ export default function ParkingMap() {
 
         let isActive = true;
 
-        const handleMapLoad = (): void => {
-            const loadHardcodedBoundary = async (): Promise<void> => {
-                try {
+        const addBoundaryLayers = async (): Promise<void> => {
+            try {
+                // Load boundary data if not already cached
+                if (!boundaryDataRef.current) {
                     const boundaryResponse = await fetch(BOUNDARY_GEOJSON_PATH, {
                         method: "GET",
                         cache: "no-store",
@@ -410,52 +417,57 @@ export default function ParkingMap() {
                         throw new Error("Boundary file missing.");
                     }
 
-                    const boundaryData = (await boundaryResponse.json()) as BoundaryFeatureCollection;
-
-                    if (!isActive) {
-                        return;
-                    }
-
-                    if (!map.getSource(BOUNDARY_SOURCE_ID)) {
-                        map.addSource(BOUNDARY_SOURCE_ID, {
-                            type: "geojson",
-                            data: boundaryData,
-                        });
-                    }
-
-                    if (!map.getLayer(BOUNDARY_FILL_LAYER_ID)) {
-                        map.addLayer({
-                            id: BOUNDARY_FILL_LAYER_ID,
-                            type: "fill",
-                            source: BOUNDARY_SOURCE_ID,
-                            paint: {
-                                "fill-color": "#0ea5e9",
-                                "fill-opacity": 0.2,
-                            },
-                        });
-                    }
-
-                    if (!map.getLayer(BOUNDARY_LINE_LAYER_ID)) {
-                        map.addLayer({
-                            id: BOUNDARY_LINE_LAYER_ID,
-                            type: "line",
-                            source: BOUNDARY_SOURCE_ID,
-                            paint: {
-                                "line-color": "#0369a1",
-                                "line-width": 3,
-                            },
-                        });
-                    }
-
-                    setBoundaryLoadError("");
-                } catch {
-                    if (isActive) {
-                        setBoundaryLoadError("Unable to load hardcoded boundary file.");
-                    }
+                    boundaryDataRef.current = (await boundaryResponse.json()) as BoundaryFeatureCollection;
                 }
-            };
 
-            void loadHardcodedBoundary();
+                if (!isActive) {
+                    return;
+                }
+
+                // Add source if it doesn't exist
+                if (!map.getSource(BOUNDARY_SOURCE_ID)) {
+                    map.addSource(BOUNDARY_SOURCE_ID, {
+                        type: "geojson",
+                        data: boundaryDataRef.current,
+                    });
+                }
+
+                // Add fill layer if it doesn't exist
+                if (!map.getLayer(BOUNDARY_FILL_LAYER_ID)) {
+                    map.addLayer({
+                        id: BOUNDARY_FILL_LAYER_ID,
+                        type: "fill",
+                        source: BOUNDARY_SOURCE_ID,
+                        paint: {
+                            "fill-color": "#0ea5e9",
+                            "fill-opacity": 0.2,
+                        },
+                    });
+                }
+
+                // Add line layer if it doesn't exist
+                if (!map.getLayer(BOUNDARY_LINE_LAYER_ID)) {
+                    map.addLayer({
+                        id: BOUNDARY_LINE_LAYER_ID,
+                        type: "line",
+                        source: BOUNDARY_SOURCE_ID,
+                        paint: {
+                            "line-color": "#0369a1",
+                            "line-width": 3,
+                        },
+                    });
+                }
+
+                setBoundaryLoadError("");
+            } catch {
+                if (isActive) {
+                    setBoundaryLoadError("Unable to load hardcoded boundary file.");
+                }
+            }
+        };
+
+        const handleMapLoad = (): void => {
+            void addBoundaryLayers();
         };
 
         map.on("load", handleMapLoad);
@@ -468,53 +480,129 @@ export default function ParkingMap() {
         };
     }, []);
 
+    // Update map style when theme changes
+    useEffect(() => {
+        if (!mapRef.current) {
+            return;
+        }
+
+        // Determine effective theme based on current HTML class
+        const isDarkTheme = document.documentElement.classList.contains("dark");
+        const newStyle = isDarkTheme ? DARK_STYLE_URL : LIGHT_STYLE_URL;
+
+        const map = mapRef.current;
+
+        // Listener for when the new style is loaded
+        const handleStyleLoad = async (): Promise<void> => {
+            // Re-add boundary layers after style change
+            try {
+                if (!map.getSource(BOUNDARY_SOURCE_ID) && boundaryDataRef.current) {
+                    map.addSource(BOUNDARY_SOURCE_ID, {
+                        type: "geojson",
+                        data: boundaryDataRef.current,
+                    });
+                }
+
+                if (!map.getLayer(BOUNDARY_FILL_LAYER_ID)) {
+                    map.addLayer({
+                        id: BOUNDARY_FILL_LAYER_ID,
+                        type: "fill",
+                        source: BOUNDARY_SOURCE_ID,
+                        paint: {
+                            "fill-color": "#0ea5e9",
+                            "fill-opacity": 0.2,
+                        },
+                    });
+                }
+
+                if (!map.getLayer(BOUNDARY_LINE_LAYER_ID)) {
+                    map.addLayer({
+                        id: BOUNDARY_LINE_LAYER_ID,
+                        type: "line",
+                        source: BOUNDARY_SOURCE_ID,
+                        paint: {
+                            "line-color": "#0369a1",
+                            "line-width": 3,
+                        },
+                    });
+                }
+            } catch {
+                // Silently fail if layers can't be re-added
+            }
+        };
+
+        map.once("style.load", handleStyleLoad);
+        map.setStyle(newStyle);
+
+        return () => {
+            map.off("style.load", handleStyleLoad);
+        };
+    }, [theme]);
+
     return (
         <section className="relative h-[100dvh] w-screen overflow-hidden">
             <div ref={mapContainerRef} className="h-full w-full" />
 
-            <aside className="absolute left-3 top-3 z-10 max-h-[calc(100dvh-1.5rem)] w-[min(380px,calc(100vw-1.5rem))] overflow-auto rounded-2xl border border-slate-300/80 bg-white/92 p-4 shadow-xl backdrop-blur-sm">
-                <h2 className="text-lg font-semibold text-slate-900">JACPark Reporting</h2>
+            <aside className="absolute left-3 top-3 z-10 max-h-[calc(100dvh-1.5rem)] w-[min(380px,calc(100vw-1.5rem))] overflow-auto rounded-2xl shadow-xl p-4 backdrop-blur-sm" style={{
+                backgroundColor: "var(--surface)",
+                borderColor: "var(--line)",
+                borderWidth: "1px",
+                color: "var(--foreground)",
+            }}>
+                <h2 className="text-lg font-semibold">JACPark Reporting</h2>
 
-                <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
-                    <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-700">Account</h3>
+                <div className="mt-3 rounded-lg p-3" style={{
+                    backgroundColor: "var(--surface-strong)",
+                    borderColor: "var(--line)",
+                    borderWidth: "1px",
+                }}>
+                    <h3 className="text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--muted)" }}>Account</h3>
                     {isAuthReady ? (
                         session ? (
                             <div className="mt-3 space-y-2">
-                                <p className="text-xs text-slate-700">
+                                <p className="text-xs">
                                     Signed in as <span className="font-semibold">{sessionDisplayName}</span>
                                 </p>
                                 <button
                                     type="button"
                                     onClick={() => setShowDashboard(!showDashboard)}
-                                    className="w-full rounded-lg bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-100 transition"
+                                    className="w-full rounded-lg px-3 py-2 text-xs font-semibold transition"
+                                    style={{
+                                        backgroundColor: "rgba(59, 130, 246, 0.15)",
+                                        borderColor: "rgba(59, 130, 246, 0.3)",
+                                        borderWidth: "1px",
+                                        color: "#3b82f6",
+                                    }}
+                                    onMouseEnter={(e) => e.currentTarget.style.opacity = "0.8"}
+                                    onMouseLeave={(e) => e.currentTarget.style.opacity = "1"}
                                 >
                                     👤 View Profile
                                 </button>
                             </div>
                         ) : (
-                            <p className="mt-1 text-xs text-slate-700">Sign in with Google to submit reports.</p>
+                            <p className="mt-1 text-xs">Sign in with Google to submit reports.</p>
                         )
                     ) : (
-                        <p className="mt-1 text-xs text-slate-700">Checking session...</p>
+                        <p className="mt-1 text-xs">Checking session...</p>
                     )}
 
-                    {authFeedback ? <p className="mt-2 text-xs font-medium text-red-700">{authFeedback}</p> : null}
+                    {authFeedback ? <p className="mt-2 text-xs font-medium text-red-500">{authFeedback}</p> : null}
                 </div>
 
-                <p className="mt-1 text-xs text-slate-600">
-                    Distance to campus center: <span className="font-semibold">{formatDistance(distanceToCampus)}</span>
+                <p className="mt-1 text-xs" style={{ color: "var(--muted)" }}>
+                    Distance to campus center: <span className="font-semibold" style={{ color: "var(--foreground)" }}>{formatDistance(distanceToCampus)}</span>
                 </p>
-                <p className={`mt-1 text-xs font-medium ${isNearCampus ? "text-emerald-700" : "text-amber-700"}`}>
+                <p className={`mt-1 text-xs font-medium ${isNearCampus ? "text-emerald-500" : "text-amber-500"}`}>
                     {isNearCampus
                         ? "You are within campus proximity and can report."
                         : `Move within ${CAMPUS_RADIUS_METERS} m to report.`}
                 </p>
-                {locationError ? <p className="mt-1 text-xs font-medium text-red-700">{locationError}</p> : null}
-                {boundaryLoadError ? <p className="mt-1 text-xs font-medium text-red-700">{boundaryLoadError}</p> : null}
+                {locationError ? <p className="mt-1 text-xs font-medium text-red-500">{locationError}</p> : null}
+                {boundaryLoadError ? <p className="mt-1 text-xs font-medium text-red-500">{boundaryLoadError}</p> : null}
 
                 <form className="mt-4 space-y-3" onSubmit={handleReportSubmit}>
                     <div>
-                        <label className="text-xs font-semibold uppercase tracking-wide text-slate-600">
+                        <label className="text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--muted)" }}>
                             What are you doing?
                         </label>
                         <div className="mt-2 grid grid-cols-1 gap-2">
@@ -526,11 +614,13 @@ export default function ParkingMap() {
                                         key={actionType}
                                         type="button"
                                         onClick={() => setSelectedAction(actionType)}
-                                        className={`rounded-lg border px-3 py-2 text-left text-sm font-semibold transition ${
-                                            isSelected
-                                                ? "border-emerald-500 bg-emerald-50 text-emerald-800"
-                                                : "border-slate-300 bg-white text-slate-800"
-                                        }`}
+                                        className="rounded-lg px-3 py-2 text-left text-sm font-semibold transition"
+                                        style={{
+                                            backgroundColor: isSelected ? "rgba(34, 197, 94, 0.15)" : "var(--surface-strong)",
+                                            borderColor: isSelected ? "rgba(34, 197, 94, 0.3)" : "var(--line)",
+                                            borderWidth: "1px",
+                                            color: isSelected ? "#22c55e" : "var(--foreground)",
+                                        }}
                                     >
                                         {REPORT_ACTION_CONFIG[actionType].label}
                                     </button>
@@ -538,12 +628,12 @@ export default function ParkingMap() {
                             })}
                         </div>
                         {selectedAction ? (
-                            <p className="mt-2 text-xs text-slate-600">{REPORT_ACTION_CONFIG[selectedAction].description}</p>
+                            <p className="mt-2 text-xs" style={{ color: "var(--muted)" }}>{REPORT_ACTION_CONFIG[selectedAction].description}</p>
                         ) : null}
                     </div>
 
                     <div>
-                        <label className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-600">
+                        <label className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--muted)" }}>
                             <input
                                 type="checkbox"
                                 checked={includeFullnessEstimate}
@@ -554,7 +644,11 @@ export default function ParkingMap() {
                         </label>
 
                         {includeFullnessEstimate ? (
-                            <div className="mt-2 rounded-lg border border-slate-200 bg-white p-3">
+                            <div className="mt-2 rounded-lg p-3" style={{
+                                backgroundColor: "var(--surface-strong)",
+                                borderColor: "var(--line)",
+                                borderWidth: "1px",
+                            }}>
                                 <input
                                     type="range"
                                     min={1}
@@ -565,7 +659,7 @@ export default function ParkingMap() {
                                     className="w-full accent-sky-600"
                                 />
 
-                                <div className="mt-1 flex justify-between text-[10px] font-semibold text-slate-500">
+                                <div className="mt-1 flex justify-between text-[10px] font-semibold" style={{ color: "var(--muted)" }}>
                                     <span>1</span>
                                     <span>2</span>
                                     <span>3</span>
@@ -573,55 +667,64 @@ export default function ParkingMap() {
                                     <span>5</span>
                                 </div>
 
-                                <p className="mt-2 text-xs text-slate-700">
+                                <p className="mt-2 text-xs">
                                     <span className="font-semibold">{fullnessLevel}/5:</span>{" "}
                                     {FULLNESS_DESCRIPTIONS[fullnessLevel]}
                                 </p>
                             </div>
                         ) : (
-                            <p className="mt-1 text-xs text-slate-600">No fullness estimate will be attached to this update.</p>
+                            <p className="mt-1 text-xs" style={{ color: "var(--muted)" }}>No fullness estimate will be attached to this update.</p>
                         )}
                     </div>
 
                     <button
                         type="submit"
                         disabled={!canSubmitReport}
-                        className="w-full rounded-lg bg-sky-600 px-3 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-400"
+                        className="w-full rounded-lg px-3 py-2 text-sm font-semibold text-white transition"
+                        style={{
+                            backgroundColor: canSubmitReport ? "#0ea5e9" : "var(--surface-strong)",
+                            opacity: !canSubmitReport ? 0.5 : 1,
+                            cursor: !canSubmitReport ? "not-allowed" : "pointer",
+                        }}
                     >
                         {isSubmittingReport ? "Submitting..." : "Submit update"}
                     </button>
                 </form>
 
-                {reportFeedback ? <p className="mt-2 text-xs font-medium text-slate-700">{reportFeedback}</p> : null}
+                {reportFeedback ? <p className="mt-2 text-xs font-medium" style={{ color: "var(--muted)" }}>{reportFeedback}</p> : null}
 
-                <div className="mt-5 border-t border-slate-300 pt-4">
-                    <h3 className="text-sm font-semibold text-slate-900">Latest updates</h3>
-                    {reportsLoadError ? <p className="mt-1 text-xs font-medium text-red-700">{reportsLoadError}</p> : null}
+                <div className="mt-5 pt-4" style={{ borderTopColor: "var(--line)", borderTopWidth: "1px" }}>
+                    <h3 className="text-sm font-semibold">Latest updates</h3>
+                    {reportsLoadError ? <p className="mt-1 text-xs font-medium text-red-500">{reportsLoadError}</p> : null}
                     {isLoadingReports ? (
-                        <p className="mt-1 text-xs text-slate-600">Loading reports...</p>
+                        <p className="mt-1 text-xs" style={{ color: "var(--muted)" }}>Loading reports...</p>
                     ) : reports.length === 0 ? (
-                        <p className="mt-1 text-xs text-slate-600">No reports have been submitted yet.</p>
+                        <p className="mt-1 text-xs" style={{ color: "var(--muted)" }}>No reports have been submitted yet.</p>
                     ) : (
                         <ul className="mt-2 space-y-2">
                             {reports.map((report) => (
-                                <li key={report.id} className="rounded-lg border border-slate-300 bg-white p-2">
-                                    <p className="text-xs font-semibold text-slate-800">{formatActionLabel(report.actionType)}</p>
-                                    <p className="text-xs text-slate-600">
+                                <li key={report.id} className="rounded-lg p-2" style={{
+                                    backgroundColor: "var(--surface-strong)",
+                                    borderColor: "var(--line)",
+                                    borderWidth: "1px",
+                                }}>
+                                    <p className="text-xs font-semibold">{formatActionLabel(report.actionType)}</p>
+                                    <p className="text-xs" style={{ color: "var(--muted)" }}>
                                         {new Date(report.createdAt).toLocaleTimeString()} •{" "}
                                         {formatDistance(report.distanceToCampusMeters)}
                                     </p>
-                                    <p className="text-xs text-slate-600">
+                                    <p className="text-xs" style={{ color: "var(--muted)" }}>
                                         by <span className="font-semibold">{report.reporterName}</span> • {report.reporterPoints}{" "}
                                         pts
                                     </p>
                                     {report.fullnessLevel ? (
-                                        <p className="mt-1 text-xs text-slate-700">
+                                        <p className="mt-1 text-xs">
                                             Fullness {report.fullnessLevel}/5: {FULLNESS_DESCRIPTIONS[report.fullnessLevel]}
                                         </p>
                                     ) : (
-                                        <p className="mt-1 text-xs text-slate-500">No fullness estimate provided.</p>
+                                        <p className="mt-1 text-xs" style={{ color: "var(--muted)" }}>No fullness estimate provided.</p>
                                     )}
-                                    <p className="mt-1 text-[10px] uppercase tracking-wide text-slate-500">
+                                    <p className="mt-1 text-[10px] uppercase tracking-wide" style={{ color: "var(--muted)" }}>
                                         Signal: {formatAvailabilityLabel(report.availability)}
                                     </p>
                                 </li>
@@ -637,6 +740,7 @@ export default function ParkingMap() {
                     onSignOut={handleSignOut}
                     isSigningOut={isSigningOut}
                     onSettingsClick={() => setShowSettings(true)}
+                    onLeaderboardClick={() => setShowLeaderboard(true)}
                     onClose={() => setShowDashboard(false)}
                 />
             )}
@@ -645,6 +749,13 @@ export default function ParkingMap() {
                 <SettingsModal
                     session={session}
                     onClose={() => setShowSettings(false)}
+                />
+            )}
+
+            {showLeaderboard && (
+                <LeaderboardModal
+                    session={session}
+                    onClose={() => setShowLeaderboard(false)}
                 />
             )}
         </section>

@@ -14,11 +14,11 @@
 
 html.light {
     --background: #ffffff;
-    --foreground: #1f2937;
-    --surface: rgba(243, 244, 246, 0.72);
-    --surface-strong: #f3f4f6;
-    --muted: #6b7280;
-    --line: rgba(107, 114, 128, 0.28);
+    --foreground: #1a2332;
+    --surface: rgba(250, 250, 252, 0.95);
+    --surface-strong: #f0f2f8;
+    --muted: #6b7888;
+    --line: rgba(107, 120, 136, 0.2);
     --accent: #f95a21;
     --accent-soft: rgba(249, 90, 33, 0.16);
     --accent-weak: rgba(249, 90, 33, 0.38);
@@ -47,7 +47,9 @@ body {
 }
 
 html.light body {
-    background: #f9fafb;
+    background:
+        radial-gradient(circle at 10% -10%, rgba(249, 90, 33, 0.15), transparent 40%),
+        radial-gradient(circle at 110% 4%, rgba(39, 122, 255, 0.15), transparent 36%), var(--background);
 }
 
 html.dark body {

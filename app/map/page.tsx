@@ -19,6 +19,8 @@ export default function MapPage() {
         const checkAuth = async () => {
             try {
                 const supabase = getSupabaseBrowserClient();
+                
+                // First try to get the stored session from localStorage
                 const { data } = await supabase.auth.getSession();
 
                 if (isMounted) {
@@ -38,10 +40,27 @@ export default function MapPage() {
             }
         };
 
+        // Check session immediately
         checkAuth();
+
+        // Set up auth state listener for real-time updates
+        const supabase = getSupabaseBrowserClient();
+        const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
+            if (isMounted) {
+                if (session) {
+                    setSession(session);
+                    setIsLoading(false);
+                } else if (event === "SIGNED_OUT") {
+                    // User signed out
+                    setSession(null);
+                    router.push("/");
+                }
+            }
+        });
 
         return () => {
             isMounted = false;
+            authListener?.subscription.unsubscribe();
         };
     }, [router]);
 
