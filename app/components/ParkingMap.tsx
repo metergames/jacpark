@@ -1105,251 +1105,182 @@ export default function ParkingMap() {
 
     return (
         <section className="relative h-[100dvh] w-screen overflow-hidden">
+            {/* Full-screen map */}
             <div ref={mapContainerRef} className="h-full w-full" />
 
-            <aside
-                className="absolute left-2 top-2 sm:left-3 sm:top-3 z-10 max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-1.5rem)] w-[min(280px,calc(100vw-1rem))] sm:w-[min(380px,calc(100vw-1.5rem))] overflow-auto rounded-xl sm:rounded-2xl shadow-xl p-3 sm:p-4 backdrop-blur-sm"
-                style={{
-                    backgroundColor: "var(--surface)",
-                    borderColor: "var(--line)",
-                    borderWidth: "1px",
-                    color: "var(--foreground)",
-                }}
-            >
-                <h2 className="text-sm sm:text-lg font-semibold truncate">JACPark Reporting</h2>
+            {/* Top bar: minimal info */}
+            <div className="absolute top-0 left-0 right-0 z-10 px-4 py-3 sm:py-4 flex items-center justify-between" style={{ backgroundColor: "rgba(0,0,0,0.3)", backdropFilter: "blur(8px)" }}>
+                <div className="flex items-center gap-2">
+                    <div className="text-sm sm:text-base font-semibold text-white">
+                        {formatDistance(distanceToCampus)}
+                    </div>
+                    <div className={`text-xs sm:text-sm font-medium ${isNearCampus ? "text-green-400" : "text-amber-400"}`}>
+                        {isNearCampus ? "✓ Ready" : "Move closer"}
+                    </div>
+                </div>
+                <div className="flex items-center gap-2">
+                    {session ? (
+                        <>
+                            <button
+                                onClick={() => setShowDashboard(true)}
+                                className="px-3 py-1.5 rounded-full text-xs font-semibold text-white transition"
+                                style={{ backgroundColor: "rgba(59, 130, 246, 0.4)" }}
+                            >
+                                👤
+                            </button>
+                        </>
+                    ) : (
+                        <div className="text-xs text-gray-300">Sign in to report</div>
+                    )}
+                </div>
+            </div>
 
-                <div
-                    className="mt-2 sm:mt-3 rounded-lg p-2 sm:p-3"
-                    style={{
-                        backgroundColor: "var(--surface-strong)",
+            {/* Bottom sheet: report form (only show when action selected) */}
+            {selectedAction && (
+                <div className="fixed bottom-0 left-0 right-0 z-20 pt-3" style={{ animation: "slideUp 0.3s ease-out" }}>
+                    <div className="rounded-t-3xl shadow-2xl p-4 sm:p-6 max-h-[80dvh] overflow-auto" style={{
+                        backgroundColor: "var(--surface)",
                         borderColor: "var(--line)",
                         borderWidth: "1px",
-                    }}
-                >
-                    <h3 className="text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--muted)" }}>
-                        Account
-                    </h3>
-                    {isAuthReady ? (
-                        session ? (
-                            <div className="mt-2 sm:mt-3 space-y-2">
-                                <p className="text-xs sm:text-sm">
-                                    Signed in as <span className="font-semibold">{sessionDisplayName}</span>
-                                </p>
-                                <button
-                                    type="button"
-                                    onClick={() => setShowDashboard(!showDashboard)}
-                                    className="w-full rounded-lg px-3 py-2 sm:py-2.5 text-xs sm:text-sm font-semibold transition"
-                                    style={{
-                                        backgroundColor: "rgba(59, 130, 246, 0.15)",
-                                        borderColor: "rgba(59, 130, 246, 0.3)",
-                                        borderWidth: "1px",
-                                        color: "#3b82f6",
-                                    }}
-                                    onMouseEnter={(e) => (e.currentTarget.style.opacity = "0.8")}
-                                    onMouseLeave={(e) => (e.currentTarget.style.opacity = "1")}
-                                >
-                                    👤 View Profile
-                                </button>
+                        borderBottomWidth: "0px",
+                    }}>
+                        {/* Handle bar */}
+                        <div className="flex justify-center mb-2">
+                            <div className="w-12 h-1 rounded-full" style={{ backgroundColor: "var(--line)" }}></div>
+                        </div>
+
+                        {/* Form header */}
+                        <div className="flex items-center justify-between mb-4">
+                            <h3 className="text-lg font-semibold">
+                                {REPORT_ACTION_CONFIG[selectedAction].label}
+                            </h3>
+                            <button
+                                onClick={() => setSelectedAction(null)}
+                                className="text-2xl"
+                                style={{ color: "var(--muted)" }}
+                            >
+                                ✕
+                            </button>
+                        </div>
+
+                        {/* Description */}
+                        <p className="text-sm mb-4" style={{ color: "var(--muted)" }}>
+                            {REPORT_ACTION_CONFIG[selectedAction].description}
+                        </p>
+
+                        {/* Fullness selector */}
+                        <form onSubmit={handleReportSubmit} className="space-y-4">
+                            <div>
+                                <label className="text-xs font-semibold uppercase tracking-[0.14em]" style={{ color: "var(--muted)" }}>Fullness Level</label>
+                                <div className="mt-3 grid grid-cols-5 gap-2">
+                                    {[1, 2, 3, 4, 5].map((level) => {
+                                        const isSelected = fullnessLevel === level;
+                                        const styleSet = FULLNESS_BUTTON_STYLES[level];
+
+                                        return (
+                                            <button
+                                                key={level}
+                                                type="button"
+                                                onClick={() => setFullnessLevel(level)}
+                                                className={`rounded-lg border px-2 py-3 text-center transition ${
+                                                    isSelected ? styleSet.selected : styleSet.idle
+                                                }`}
+                                                aria-label={`Select fullness level ${level}`}
+                                            >
+                                                <span className="flex justify-center text-lg mb-1">
+                                                    <FullnessIcon level={level} selected={isSelected} />
+                                                </span>
+                                                <span className="text-xs font-semibold">{level}</span>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                                {fullnessLevel && (
+                                    <p className="mt-2 text-xs" style={{ color: "var(--muted)" }}>
+                                        {FULLNESS_DESCRIPTIONS[fullnessLevel]}
+                                    </p>
+                                )}
                             </div>
-                        ) : (
-                            <p className="mt-1 text-xs sm:text-sm">Sign in with Google to submit reports.</p>
-                        )
-                    ) : (
-                        <p className="mt-1 text-xs sm:text-sm">Checking session...</p>
-                    )}
 
-                    {authFeedback ? <p className="mt-2 text-xs font-medium text-red-500">{authFeedback}</p> : null}
+                            {reportFeedback && (
+                                <p className="text-xs font-medium" style={{ color: reportFeedback.includes("saved") ? "var(--foreground)" : "#ef4444" }}>
+                                    {reportFeedback}
+                                </p>
+                            )}
+
+                            <button
+                                type="submit"
+                                disabled={!canSubmitReport}
+                                className="w-full rounded-xl bg-gradient-to-r from-sky-600 to-cyan-600 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-sky-500/25 transition hover:from-sky-500 hover:to-cyan-500 disabled:cursor-not-allowed disabled:from-slate-400 disabled:to-slate-400 disabled:shadow-none"
+                            >
+                                {isSubmittingReport ? "Submitting..." : "Submit"}
+                            </button>
+                        </form>
+                    </div>
                 </div>
+            )}
 
-                <p className="mt-2 sm:mt-3 text-xs sm:text-sm" style={{ color: "var(--muted)" }}>
-                    Distance to campus: <span className="font-semibold" style={{ color: "var(--foreground)" }}>{formatDistance(distanceToCampus)}</span>
-                </p>
-                <p className={`mt-1 text-xs font-medium ${isNearCampus ? "text-emerald-500" : "text-amber-500"}`}>
-                    {isNearCampus
-                        ? "✓ You can report"
-                        : `Move within ${CAMPUS_RADIUS_METERS} m`}
-                </p>
-                {locationError ? <p className="mt-1 text-xs font-medium text-red-500">{locationError}</p> : null}
-                {boundaryLoadError ? <p className="mt-1 text-xs font-medium text-red-500">{boundaryLoadError}</p> : null}
-
-                <form className="mt-3 sm:mt-4 space-y-2 sm:space-y-3" onSubmit={handleReportSubmit}>
-                    <div>
-                        <label className="text-xs font-semibold uppercase tracking-[0.14em]" style={{ color: "var(--muted)" }}>Quick update</label>
-                        <div className="mt-2 grid grid-cols-1 gap-2 sm:gap-3">
+            {/* Floating action buttons (bottom right) - always visible */}
+            {isAuthReady && session ? (
+                <div className="fixed bottom-4 sm:bottom-6 right-4 sm:right-6 z-10 flex flex-col gap-3">
+                    {!selectedAction && (
+                        <>
                             {(Object.keys(REPORT_ACTION_CONFIG) as ReportActionType[]).map((actionType) => {
-                                const isSelected = selectedAction === actionType;
+                                const isDisabled = isActionDisabledForParkState(actionType, isUserParkedToday);
                                 const styleSet = ACTION_CARD_STYLES[actionType];
-                                const isActionDisabled = isActionDisabledForParkState(actionType, isUserParkedToday);
-
                                 return (
                                     <button
                                         key={actionType}
-                                        type="button"
-                                        onClick={() => {
-                                            if (!isActionDisabled) {
-                                                setSelectedAction(actionType);
-                                            }
+                                        onClick={() => !isDisabled && setSelectedAction(actionType)}
+                                        disabled={isDisabled}
+                                        className="flex items-center gap-2 px-4 py-3 rounded-full font-medium text-sm shadow-lg transition"
+                                        style={{
+                                            backgroundColor: isDisabled ? "var(--surface-strong)" : "white",
+                                            color: isDisabled ? "var(--muted)" : "var(--foreground)",
+                                            opacity: isDisabled ? 0.5 : 1,
                                         }}
-                                        disabled={isActionDisabled}
-                                        className={`rounded-xl sm:rounded-2xl border p-3 sm:p-4 text-left transition min-h-16 sm:min-h-auto ${
-                                            isActionDisabled
-                                                ? "cursor-not-allowed border-[var(--line)] bg-[var(--surface-strong)] text-slate-400"
-                                                : isSelected
-                                                  ? styleSet.selected
-                                                  : styleSet.idle
-                                        }`}
                                     >
-                                        <div className="flex items-start gap-2 sm:gap-3">
-                                            <span
-                                                className={`mt-0.5 inline-flex h-8 w-8 sm:h-9 sm:w-9 flex-shrink-0 items-center justify-center rounded-lg sm:rounded-xl text-sm sm:text-base ${
-                                                    isActionDisabled ? "bg-[var(--surface-strong)] text-slate-400" : styleSet.iconBg
-                                                }`}
-                                            >
-                                                <ActionIcon actionType={actionType} />
-                                            </span>
-                                            <span className="min-w-0 flex-1">
-                                                <span className="block text-sm sm:text-[15px] font-semibold leading-tight">
-                                                    {REPORT_ACTION_CONFIG[actionType].label}
-                                                </span>
-                                                <span
-                                                    className={`mt-0.5 block text-xs ${isActionDisabled ? "text-slate-400" : "text-[var(--muted)]"}`}
-                                                >
-                                                    {REPORT_ACTION_CONFIG[actionType].description}
-                                                </span>
-                                            </span>
-                                        </div>
+                                        <span className="text-lg"><ActionIcon actionType={actionType} /></span>
+                                        {REPORT_ACTION_CONFIG[actionType].label}
                                     </button>
                                 );
                             })}
-                        </div>
-                        <p className="mt-2 text-[10px] sm:text-[11px] leading-tight" style={{ color: "var(--muted)" }}>
-                            {isUserParkedToday
-                                ? "Status: you are marked as parked"
-                                : "Status: you are not marked as parked"}
-                        </p>
-                    </div>
+                        </>
+                    )}
+                </div>
+            ) : null}
 
-                    <div className="rounded-xl sm:rounded-2xl border p-3 sm:p-3" style={{ borderColor: "var(--line)", backgroundColor: "var(--surface)" }}>
-                        <label className="text-xs font-semibold uppercase tracking-[0.14em]" style={{ color: "var(--muted)" }}>Fullness</label>
-
-                        <div className="mt-2 sm:mt-3">
-                            <div className="grid grid-cols-5 gap-1.5 sm:gap-2">
-                                {[1, 2, 3, 4, 5].map((level) => {
-                                    const isSelected = fullnessLevel === level;
-                                    const styleSet = FULLNESS_BUTTON_STYLES[level];
-
-                                    return (
-                                        <button
-                                            key={level}
-                                            type="button"
-                                            onClick={() => setFullnessLevel(level)}
-                                            className={`rounded-lg border px-1.5 py-2 sm:px-2 sm:py-2 text-center text-[10px] sm:text-xs font-semibold transition min-h-12 sm:min-h-auto ${
-                                                isSelected ? styleSet.selected : styleSet.idle
-                                            }`}
-                                            aria-label={`Select fullness level ${level}`}
-                                        >
-                                            <span className="mx-auto mb-1 flex justify-center text-base sm:text-lg">
-                                                <FullnessIcon level={level} selected={isSelected} />
-                                            </span>
-                                            <span className="text-[9px] sm:text-[11px]">{level}</span>
-                                        </button>
-                                    );
-                                })}
+            {/* Latest update card - bottom left */}
+            {isAuthReady && (
+                <div className="absolute bottom-4 sm:bottom-6 left-4 sm:left-6 z-10 max-w-xs" style={{ pointerEvents: "none" }}>
+                    {latestReport ? (
+                        <div className="rounded-2xl shadow-lg p-3 sm:p-4" style={{
+                            backgroundColor: "var(--surface)",
+                            borderColor: "var(--line)",
+                            borderWidth: "1px",
+                        }}>
+                            <p className="text-xs sm:text-sm font-semibold" style={{ color: "var(--foreground)" }}>
+                                {formatPublicUpdateText(latestReport.actionType)}
+                            </p>
+                            <div className="flex items-center gap-2 mt-1">
+                                <span className="text-xs" style={{ color: "var(--muted)" }}>
+                                    {formatUpdateTime(latestReport.createdAt)}
+                                </span>
+                                <span className="text-xs font-semibold">
+                                    {FULLNESS_DESCRIPTIONS[latestReport.fullnessLevel ?? 3]}
+                                </span>
                             </div>
-
-                            <p
-                                className="mt-2 sm:mt-3 rounded-lg px-2 py-1.5 text-xs sm:text-sm leading-snug"
-                                style={{ backgroundColor: "var(--surface-strong)", color: "var(--foreground)" }}
-                            >
-                                {fullnessLevel === null ? (
-                                    "Select 1-5"
-                                ) : (
-                                    <>
-                                        <span className="font-semibold">{fullnessLevel}/5:</span> {FULLNESS_DESCRIPTIONS[fullnessLevel]}
-                                    </>
-                                )}
+                            <p className="text-xs mt-1" style={{ color: "var(--muted)" }}>
+                                🔥 {heatmapData.features.length} hotspots
                             </p>
                         </div>
-                    </div>
+                    ) : (
+                        <div className="text-xs text-gray-400">No reports yet</div>
+                    )}
+                </div>
+            )}
 
-                    <button
-                        type="submit"
-                        disabled={!canSubmitReport}
-                        className="w-full rounded-xl sm:rounded-lg bg-gradient-to-r from-sky-600 to-cyan-600 px-3 sm:px-4 py-3 sm:py-3 text-xs sm:text-sm font-semibold text-white shadow-lg shadow-sky-500/25 transition hover:from-sky-500 hover:to-cyan-500 disabled:cursor-not-allowed disabled:from-slate-400 disabled:to-slate-400 disabled:shadow-none min-h-12 sm:min-h-auto"
-                    >
-                        {isSubmittingReport ? "Submitting..." : "Submit update"}
-                    </button>
-                </form>
-
-                {reportFeedback ? (
-                    <p className="mt-2 sm:mt-3 text-xs sm:text-sm font-medium" style={{ color: "var(--foreground)" }}>
-                        {reportFeedback}
-                    </p>
-                ) : null}
-            </aside>
-
-            <section
-                className="absolute bottom-2 right-2 sm:bottom-3 sm:right-3 z-10 w-[min(280px,calc(100vw-1rem))] sm:w-[min(320px,calc(100vw-1.5rem))] rounded-lg sm:rounded-xl p-2.5 sm:p-3 shadow-lg backdrop-blur-sm"
-                style={{
-                    borderColor: "var(--line)",
-                    borderWidth: "1px",
-                    backgroundColor: "var(--surface)",
-                }}
-            >
-                <h3 className="text-[10px] sm:text-[11px] font-semibold uppercase tracking-[0.14em]" style={{ color: "var(--muted)" }}>
-                    Latest update
-                </h3>
-                <p className="mt-0.5 text-[10px] sm:text-[11px]" style={{ color: "var(--muted)" }}>Newest report</p>
-                <p className="text-[9px] sm:text-[10px]" style={{ color: "var(--muted)" }}>Refreshes every ~90s</p>
-                <p className="mt-1 text-[9px] sm:text-[10px]" style={{ color: "var(--muted)" }}>
-                    🔥 Heatmap: <span style={{ color: "var(--foreground)" }}>{heatmapData.features.length}</span>
-                </p>
-
-                {reportsLoadError ? <p className="mt-1.5 text-[10px] font-medium text-red-700">{reportsLoadError}</p> : null}
-
-                {isLoadingReports && !latestReport ? (
-                    <p className="mt-1.5 text-[10px]" style={{ color: "var(--muted)" }}>
-                        Loading...
-                    </p>
-                ) : !latestReport ? (
-                    <p className="mt-1.5 text-[10px]" style={{ color: "var(--muted)" }}>
-                        No reports yet
-                    </p>
-                ) : (
-                    <div className="relative mt-1.5 min-h-14 sm:min-h-14 overflow-hidden">
-                        {previousReport ? (
-                            <article
-                                className={`absolute inset-0 rounded-md px-2 py-1 transition-all duration-500 ease-out ${
-                                    isPreviousReportFading ? "-translate-y-2 opacity-0" : "translate-y-0 opacity-100"
-                                }`}
-                                style={{ borderColor: "var(--line)", borderWidth: "1px", backgroundColor: "var(--surface-strong)" }}
-                            >
-                                <p className="text-[10px] leading-tight" style={{ color: "var(--foreground)" }}>
-                                    {formatPublicUpdateText(previousReport.actionType)} • {formatUpdateTime(previousReport.createdAt)}
-                                </p>
-                                <p className="mt-0.5 text-[9px]" style={{ color: "var(--muted)" }}>
-                                    {previousReport.fullnessLevel ?? "?"}/5 • {formatAvailabilityLabel(previousReport.availability)}
-                                </p>
-                            </article>
-                        ) : null}
-
-                        <article
-                            className={`relative rounded-md px-2 py-1 transition-all duration-300 ease-out ${
-                                isLatestReportEntering ? "translate-y-1.5 opacity-0" : "translate-y-0 opacity-100"
-                            }`}
-                            style={{ borderColor: "var(--line)", borderWidth: "1px", backgroundColor: "var(--surface-strong)" }}
-                        >
-                            <p className="text-[10px] leading-tight" style={{ color: "var(--foreground)" }}>
-                                {formatPublicUpdateText(latestReport.actionType)} • {formatUpdateTime(latestReport.createdAt)}
-                            </p>
-                            <p className="mt-0.5 text-[9px]" style={{ color: "var(--muted)" }}>
-                                {latestReport.fullnessLevel ?? "?"}/5 • {formatAvailabilityLabel(latestReport.availability)}
-                            </p>
-                        </article>
-                    </div>
-                )}
-            </section>
-
+            {/* Modals */}
             {showDashboard && (
                 <UserDashboard
                     session={session}
@@ -1364,6 +1295,17 @@ export default function ParkingMap() {
             {showSettings && <SettingsModal session={session} onClose={() => setShowSettings(false)} />}
 
             {showLeaderboard && <LeaderboardModal session={session} onClose={() => setShowLeaderboard(false)} />}
+
+            <style jsx>{`
+                @keyframes slideUp {
+                    from {
+                        transform: translateY(100%);
+                    }
+                    to {
+                        transform: translateY(0);
+                    }
+                }
+            `}</style>
         </section>
     );
 }
