@@ -2,11 +2,15 @@
 
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
-let cachedBrowserClient: SupabaseClient | null = null;
+type GlobalSupabase = typeof globalThis & {
+    __jacparkSupabaseBrowserClient?: SupabaseClient;
+};
+
+const globalSupabase = globalThis as GlobalSupabase;
 
 export const getSupabaseBrowserClient = (): SupabaseClient => {
-    if (cachedBrowserClient) {
-        return cachedBrowserClient;
+    if (globalSupabase.__jacparkSupabaseBrowserClient) {
+        return globalSupabase.__jacparkSupabaseBrowserClient;
     }
 
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -18,7 +22,7 @@ export const getSupabaseBrowserClient = (): SupabaseClient => {
         );
     }
 
-    cachedBrowserClient = createClient(supabaseUrl, supabaseAnonKey, {
+    globalSupabase.__jacparkSupabaseBrowserClient = createClient(supabaseUrl, supabaseAnonKey, {
         auth: {
             persistSession: true,
             autoRefreshToken: true,
@@ -26,5 +30,5 @@ export const getSupabaseBrowserClient = (): SupabaseClient => {
         },
     });
 
-    return cachedBrowserClient;
+    return globalSupabase.__jacparkSupabaseBrowserClient;
 };

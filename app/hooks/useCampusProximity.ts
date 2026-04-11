@@ -7,6 +7,7 @@ type CampusProximityState = {
     isNearCampus: boolean;
     distanceToCampus: number;
     locationError: string;
+    currentLocation: LatLng | null;
 };
 
 export default function useCampusProximity(): CampusProximityState {
@@ -14,6 +15,7 @@ export default function useCampusProximity(): CampusProximityState {
 
     const [distanceToCampus, setDistanceToCampus] = useState<number>(Number.POSITIVE_INFINITY);
     const [isNearCampus, setIsNearCampus] = useState<boolean>(false);
+    const [currentLocation, setCurrentLocation] = useState<LatLng | null>(null);
     const [locationError, setLocationError] = useState<string>(
         geolocationSupported ? "" : "Geolocation is not supported by this browser.",
     );
@@ -32,6 +34,7 @@ export default function useCampusProximity(): CampusProximityState {
 
                 const distance = haversineDistanceMeters(userLocation, JOHN_ABBOTT_CENTER);
 
+                setCurrentLocation(userLocation);
                 setDistanceToCampus(distance);
                 setIsNearCampus(distance <= CAMPUS_RADIUS_METERS);
                 setLocationError("");
@@ -43,6 +46,7 @@ export default function useCampusProximity(): CampusProximityState {
                     setLocationError("Unable to get your current location.");
                 }
 
+                setCurrentLocation(null);
                 setIsNearCampus(false);
             },
             {
@@ -61,5 +65,6 @@ export default function useCampusProximity(): CampusProximityState {
         isNearCampus,
         distanceToCampus,
         locationError,
+        currentLocation,
     };
 }

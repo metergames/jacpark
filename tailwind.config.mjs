@@ -1,9 +1,7 @@
 /** @type {import('tailwindcss').Config} */
-export default {
+const config = {
     darkMode: ["selector", ["html.dark", "html:not(.light)"]],
-    content: [
-        "./app/**/*.{js,ts,jsx,tsx,mdx}",
-    ],
+    content: ["./app/**/*.{js,ts,jsx,tsx,mdx}"],
     theme: {
         extend: {
             colors: {
@@ -19,3 +17,5 @@ export default {
     },
     plugins: [],
 };
+
+export default config;

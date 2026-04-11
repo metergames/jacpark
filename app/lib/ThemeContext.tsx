@@ -27,24 +27,16 @@ function getEffectiveTheme(theme: Theme): "light" | "dark" {
 }
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-    const [theme, setTheme] = useState<Theme>("auto");
-    const [mounted, setMounted] = useState(false);
-
-    // Load theme from localStorage on mount
-    useEffect(() => {
-        const savedTheme = localStorage.getItem("theme") as Theme | null;
-        if (savedTheme) {
-            setTheme(savedTheme);
-            applyTheme(savedTheme);
-        } else {
-            // Default to auto theme
-            setTheme("auto");
-            applyTheme("auto");
+    const [theme, setTheme] = useState<Theme>(() => {
+        if (typeof window === "undefined") {
+            return "auto";
         }
-        setMounted(true);
-    }, []);
 
-    const applyTheme = (newTheme: Theme) => {
+        const savedTheme = localStorage.getItem("theme") as Theme | null;
+        return savedTheme ?? "auto";
+    });
+
+    function applyTheme(newTheme: Theme) {
         const html = document.documentElement;
         const effectiveTheme = getEffectiveTheme(newTheme);
 
@@ -55,21 +47,26 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
             html.classList.remove("dark");
             html.classList.add("light");
         }
-    };
+    }
+
+    // Keep the document class in sync with the selected theme.
+    useEffect(() => {
+        applyTheme(theme);
+    }, [theme]);
 
     // Listen for system theme changes when in auto mode
     useEffect(() => {
-        if (!mounted || theme !== "auto") return;
+        if (theme !== "auto") return;
 
         const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
-        
+
         const handleChange = () => {
             applyTheme("auto");
         };
 
         mediaQuery.addEventListener("change", handleChange);
         return () => mediaQuery.removeEventListener("change", handleChange);
-    }, [theme, mounted]);
+    }, [theme]);
 
     const toggleTheme = () => {
         setTheme((prevTheme) => {
@@ -87,10 +84,6 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
         applyTheme(newTheme);
         setTheme(newTheme);
     };
-
-    if (!mounted) {
-        return <>{children}</>;
-    }
 
     return <ThemeContext.Provider value={{ theme, toggleTheme, setTheme: setThemeValue }}>{children}</ThemeContext.Provider>;
 }

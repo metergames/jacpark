@@ -6,7 +6,7 @@ import type { FeatureCollection, MultiPolygon, Polygon } from "geojson";
 import type { Session } from "@supabase/supabase-js";
 import mapboxgl from "mapbox-gl";
 import useCampusProximity from "../hooks/useCampusProximity";
-import { CAMPUS_RADIUS_METERS } from "../lib/geo";
+import { CAMPUS_RADIUS_METERS, type LatLng } from "../lib/geo";
 import { getSupabaseBrowserClient } from "../lib/supabaseBrowser";
 import { useTheme } from "../lib/ThemeContext";
 import UserDashboard from "./UserDashboard";
@@ -59,6 +59,10 @@ const BOUNDARY_LINE_LAYER_ID = "parking-boundary-line";
 const BOUNDARY_GEOJSON_PATH = "/boundaries/jac-parking-boundaries.geojson";
 const LATEST_UPDATE_LIMIT = 1;
 const REPORTS_REFRESH_INTERVAL_MS = 90000;
+const SUBMIT_RETRY_BASE_DELAY_MS = 400;
+const SUBMIT_RETRY_MAX_ATTEMPTS = 3;
+
+const TRANSIENT_SUBMIT_STATUSES: ReadonlySet<number> = new Set([408, 425, 429, 500, 502, 503, 504]);
 
 const REPORT_ACTION_CONFIG: Record<ReportActionType, { label: string; description: string }> = {
     parked: {
@@ -177,7 +181,7 @@ const FullnessIcon = ({ level, selected }: { level: number; selected: boolean })
     </svg>
 );
 
-const getCurrentPosition = (): Promise<{ latitude: number; longitude: number }> =>
+const getCurrentPosition = (): Promise<LatLng> =>
     new Promise((resolve, reject) => {
         if (!("geolocation" in navigator)) {
             reject(new Error("Geolocation is not supported by this browser."));
@@ -196,11 +200,126 @@ const getCurrentPosition = (): Promise<{ latitude: number; longitude: number }> 
             },
             {
                 enableHighAccuracy: true,
-                timeout: 10000,
+                timeout: 5000,
                 maximumAge: 5000,
             },
         );
     });
+
+const resolveReporterLocation = async (currentLocation: LatLng | null): Promise<LatLng> => {
+    if (currentLocation) {
+        return currentLocation;
+    }
+
+    return getCurrentPosition();
+};
+
+const deriveAvailabilityFromFullness = (fullnessLevel: number): ParkingAvailability => {
+    if (fullnessLevel <= 2) {
+        return "open";
+    }
+
+    if (fullnessLevel === 3) {
+        return "limited";
+    }
+
+    return "full";
+};
+
+const buildOptimisticReport = (
+    actionType: ReportActionType,
+    fullnessLevel: number,
+    distanceToCampusMeters: number,
+): ParkingReport => ({
+    id: `optimistic-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    lotName: "John Abbott Parking",
+    availability: deriveAvailabilityFromFullness(fullnessLevel),
+    actionType,
+    fullnessLevel,
+    note: "",
+    distanceToCampusMeters,
+    createdAt: new Date().toISOString(),
+});
+
+const sleep = (delayMs: number): Promise<void> =>
+    new Promise((resolve) => {
+        window.setTimeout(resolve, delayMs);
+    });
+
+const parseRetryAfterMs = (response: Response): number | null => {
+    const retryAfterHeader = response.headers.get("retry-after");
+
+    if (!retryAfterHeader) {
+        return null;
+    }
+
+    const seconds = Number.parseInt(retryAfterHeader, 10);
+
+    if (!Number.isNaN(seconds)) {
+        return Math.max(0, seconds * 1000);
+    }
+
+    const retryDateMs = Date.parse(retryAfterHeader);
+
+    if (Number.isNaN(retryDateMs)) {
+        return null;
+    }
+
+    return Math.max(0, retryDateMs - Date.now());
+};
+
+const submitReportWithRetry = async (
+    accessToken: string,
+    actionType: ReportActionType,
+    fullnessLevel: number,
+    reporterLocation: LatLng,
+): Promise<{ response: Response; payload: ReportResponse }> => {
+    for (let attempt = 1; attempt <= SUBMIT_RETRY_MAX_ATTEMPTS; attempt += 1) {
+        let response: Response;
+
+        try {
+            response = await fetch("/api/reports", {
+                method: "POST",
+                headers: {
+                    "content-type": "application/json",
+                    authorization: `Bearer ${accessToken}`,
+                },
+                body: JSON.stringify({
+                    actionType,
+                    fullnessLevel,
+                    reporterLatitude: reporterLocation.latitude,
+                    reporterLongitude: reporterLocation.longitude,
+                }),
+            });
+        } catch (error) {
+            if (attempt >= SUBMIT_RETRY_MAX_ATTEMPTS) {
+                throw error;
+            }
+
+            const retryDelayMs = SUBMIT_RETRY_BASE_DELAY_MS * 2 ** (attempt - 1);
+            await sleep(retryDelayMs);
+            continue;
+        }
+
+        let payload: ReportResponse = {};
+
+        try {
+            payload = (await response.json()) as ReportResponse;
+        } catch {
+            payload = {};
+        }
+
+        if (response.ok || !TRANSIENT_SUBMIT_STATUSES.has(response.status) || attempt >= SUBMIT_RETRY_MAX_ATTEMPTS) {
+            return { response, payload };
+        }
+
+        const retryAfterMs = parseRetryAfterMs(response);
+        const retryDelayMs = retryAfterMs ?? SUBMIT_RETRY_BASE_DELAY_MS * 2 ** (attempt - 1);
+        await sleep(retryDelayMs);
+    }
+
+    throw new Error("Report submission exhausted retry attempts.");
+};
 
 const formatDistance = (meters: number): string => {
     if (!Number.isFinite(meters)) {
@@ -278,6 +397,7 @@ export default function ParkingMap() {
     const { theme } = useTheme();
     const mapContainerRef = useRef<HTMLDivElement | null>(null);
     const mapRef = useRef<mapboxgl.Map | null>(null);
+    const mapStyleUrlRef = useRef<string>(LIGHT_STYLE_URL);
     const boundaryDataRef = useRef<BoundaryFeatureCollection | null>(null);
     const latestTransitionFrameRef = useRef<number | null>(null);
     const previousUpdateClearTimeoutRef = useRef<number | null>(null);
@@ -305,7 +425,7 @@ export default function ParkingMap() {
     const [isPreviousReportFading, setIsPreviousReportFading] = useState<boolean>(false);
     const [isLatestReportEntering, setIsLatestReportEntering] = useState<boolean>(false);
 
-    const { isNearCampus, distanceToCampus, locationError } = useCampusProximity();
+    const { isNearCampus, distanceToCampus, locationError, currentLocation } = useCampusProximity();
 
     const sessionDisplayName = useMemo(() => getSessionDisplayName(session), [session]);
 
@@ -461,46 +581,61 @@ export default function ParkingMap() {
             return;
         }
 
+        const actionToSubmit = selectedAction;
+        const fullnessToSubmit = fullnessLevel;
+
+        const previousReportsSnapshot = reports;
+        const previousParkState = isUserParkedToday;
+
+        const optimisticReport = buildOptimisticReport(actionToSubmit, fullnessToSubmit, distanceToCampus);
+
+        setReports((prevReports) => {
+            const nonOptimisticReports = prevReports.filter((report) => !report.id.startsWith("optimistic-"));
+            return [optimisticReport, ...nonOptimisticReports].slice(0, LATEST_UPDATE_LIMIT);
+        });
+
+        if (actionToSubmit === "parked") {
+            setIsUserParkedToday(true);
+        } else if (actionToSubmit === "leaving") {
+            setIsUserParkedToday(false);
+        }
+
+        setSelectedAction(null);
+        setFullnessLevel(null);
+        setReportFeedback("Sending update...");
+
         setIsSubmittingReport(true);
 
         try {
-            const position = await getCurrentPosition();
+            const reporterLocation = await resolveReporterLocation(currentLocation);
 
-            const response = await fetch("/api/reports", {
-                method: "POST",
-                headers: {
-                    "content-type": "application/json",
-                    authorization: `Bearer ${session.access_token}`,
-                },
-                body: JSON.stringify({
-                    actionType: selectedAction,
-                    fullnessLevel,
-                    reporterLatitude: position.latitude,
-                    reporterLongitude: position.longitude,
-                }),
-            });
-
-            const payload = (await response.json()) as ReportResponse;
+            const { response, payload } = await submitReportWithRetry(
+                session.access_token,
+                actionToSubmit,
+                fullnessToSubmit,
+                reporterLocation,
+            );
 
             if (!response.ok || !payload.report) {
-                setReportFeedback(payload.error ?? "Unable to submit report right now.");
+                setReports(previousReportsSnapshot);
+                setIsUserParkedToday(previousParkState);
+                setReportFeedback(payload.error ?? "Unable to sync this update right now. Please try again.");
                 return;
             }
 
             const createdReport = payload.report;
-            setReports((prevReports) => [createdReport, ...prevReports].slice(0, LATEST_UPDATE_LIMIT));
+            setReports((prevReports) =>
+                [createdReport, ...prevReports.filter((report) => report.id !== optimisticReport.id)].slice(
+                    0,
+                    LATEST_UPDATE_LIMIT,
+                ),
+            );
 
-            if (selectedAction === "parked") {
-                setIsUserParkedToday(true);
-            } else if (selectedAction === "leaving") {
-                setIsUserParkedToday(false);
-            }
-
-            setReportFeedback("Report submitted and saved.");
-            setSelectedAction(null);
-            setFullnessLevel(null);
+            setReportFeedback("Report saved.");
         } catch {
-            setReportFeedback("Unable to submit report right now.");
+            setReports(previousReportsSnapshot);
+            setIsUserParkedToday(previousParkState);
+            setReportFeedback("Unable to sync this update right now. Please try again.");
         } finally {
             setIsSubmittingReport(false);
         }
@@ -658,15 +793,20 @@ export default function ParkingMap() {
 
         mapboxgl.accessToken = accessToken;
 
+        (mapboxgl as typeof mapboxgl & { setTelemetryEnabled?: (enabled: boolean) => void }).setTelemetryEnabled?.(false);
+
+        const initialStyle = document.documentElement.classList.contains("dark") ? DARK_STYLE_URL : LIGHT_STYLE_URL;
+
         const map = new mapboxgl.Map({
             container: mapContainerRef.current,
-            style: LIGHT_STYLE_URL,
+            style: initialStyle,
             center: JOHN_ABBOTT_CENTER,
             zoom: JOHN_ABBOTT_ZOOM,
             attributionControl: false,
         });
 
         mapRef.current = map;
+        mapStyleUrlRef.current = initialStyle;
 
         let isActive = true;
 
@@ -769,6 +909,10 @@ export default function ParkingMap() {
 
         const map = mapRef.current;
 
+        if (mapStyleUrlRef.current === newStyle) {
+            return;
+        }
+
         // Listener for when the new style is loaded
         const handleStyleLoad = async (): Promise<void> => {
             // Re-add boundary layers after style change
@@ -832,10 +976,28 @@ export default function ParkingMap() {
             }
         };
 
-        map.once("style.load", handleStyleLoad);
-        map.setStyle(newStyle);
+        const applyStyle = (): void => {
+            if (mapStyleUrlRef.current === newStyle) {
+                return;
+            }
+
+            map.once("style.load", handleStyleLoad);
+            map.setStyle(newStyle, {
+                diff: false,
+                localFontFamily: "sans-serif",
+                localIdeographFontFamily: "sans-serif",
+            });
+            mapStyleUrlRef.current = newStyle;
+        };
+
+        if (map.isStyleLoaded()) {
+            applyStyle();
+        } else {
+            map.once("load", applyStyle);
+        }
 
         return () => {
+            map.off("load", applyStyle);
             map.off("style.load", handleStyleLoad);
         };
     }, [theme]);
