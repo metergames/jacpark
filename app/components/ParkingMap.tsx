@@ -13,11 +13,14 @@ import "mapbox-gl/dist/mapbox-gl.css";
 type LngLatTuple = [number, number];
 
 type ParkingAvailability = "open" | "limited" | "full";
+type ReportActionType = "parked" | "leaving" | "observing";
 
 type ParkingReport = {
     id: string;
     lotName: string;
     availability: ParkingAvailability;
+    actionType: ReportActionType;
+    fullnessLevel: number | null;
     note: string;
     distanceToCampusMeters: number;
     createdAt: string;
@@ -45,6 +48,29 @@ const BOUNDARY_SOURCE_ID = "parking-boundary-source";
 const BOUNDARY_FILL_LAYER_ID = "parking-boundary-fill";
 const BOUNDARY_LINE_LAYER_ID = "parking-boundary-line";
 const BOUNDARY_GEOJSON_PATH = "/boundaries/jac-parking-boundaries.geojson";
+
+const REPORT_ACTION_CONFIG: Record<ReportActionType, { label: string; description: string }> = {
+    parked: {
+        label: "I just parked",
+        description: "I found a spot and parked right now.",
+    },
+    leaving: {
+        label: "I am leaving now",
+        description: "I am leaving and freeing up a spot.",
+    },
+    observing: {
+        label: "I am just checking",
+        description: "I am on-site and sharing how full it looks.",
+    },
+};
+
+const FULLNESS_DESCRIPTIONS: Record<number, string> = {
+    1: "Basically empty. Lots of spots available.",
+    2: "Fairly open. You should find a spot quickly.",
+    3: "Moderate. You may need to circle once.",
+    4: "Almost full. Very limited spots left.",
+    5: "There might be one spot somewhere, good luck to the others.",
+};
 
 const getCurrentPosition = (): Promise<{ latitude: number; longitude: number }> =>
     new Promise((resolve, reject) => {
@@ -91,6 +117,8 @@ const formatAvailabilityLabel = (availability: ParkingAvailability): string => {
     return "Full";
 };
 
+const formatActionLabel = (actionType: ReportActionType): string => REPORT_ACTION_CONFIG[actionType].label;
+
 const getSessionDisplayName = (session: Session | null): string => {
     if (!session?.user) {
         return "";
@@ -123,9 +151,10 @@ export default function ParkingMap() {
     const [isStartingGoogleSignIn, setIsStartingGoogleSignIn] = useState<boolean>(false);
     const [isSigningOut, setIsSigningOut] = useState<boolean>(false);
 
-    const [lotName, setLotName] = useState<string>("");
-    const [availability, setAvailability] = useState<ParkingAvailability>("limited");
-    const [note, setNote] = useState<string>("");
+    const [selectedAction, setSelectedAction] = useState<ReportActionType | null>(null);
+    const [includeFullnessEstimate, setIncludeFullnessEstimate] = useState<boolean>(false);
+    const [fullnessLevel, setFullnessLevel] = useState<number>(3);
+
     const [reports, setReports] = useState<ParkingReport[]>([]);
     const [isLoadingReports, setIsLoadingReports] = useState<boolean>(true);
     const [isSubmittingReport, setIsSubmittingReport] = useState<boolean>(false);
@@ -138,8 +167,8 @@ export default function ParkingMap() {
     const sessionDisplayName = useMemo(() => getSessionDisplayName(session), [session]);
 
     const canSubmitReport = useMemo(
-        () => Boolean(session?.access_token) && isNearCampus && !locationError && !isSubmittingReport,
-        [session, isNearCampus, locationError, isSubmittingReport],
+        () => Boolean(session?.access_token) && Boolean(selectedAction) && isNearCampus && !locationError && !isSubmittingReport,
+        [session, selectedAction, isNearCampus, locationError, isSubmittingReport],
     );
 
     const handleGoogleSignIn = async (): Promise<void> => {
@@ -175,7 +204,6 @@ export default function ParkingMap() {
 
             if (error) {
                 setAuthFeedback(error.message || "Failed to sign out.");
-                setIsSigningOut(false);
                 return;
             }
 
@@ -183,6 +211,7 @@ export default function ParkingMap() {
             router.push("/");
         } catch {
             setAuthFeedback("Supabase auth is not configured yet.");
+        } finally {
             setIsSigningOut(false);
         }
     };
@@ -241,6 +270,11 @@ export default function ParkingMap() {
             return;
         }
 
+        if (!selectedAction) {
+            setReportFeedback("Choose an update type before submitting.");
+            return;
+        }
+
         if (locationError) {
             setReportFeedback(locationError);
             return;
@@ -252,12 +286,6 @@ export default function ParkingMap() {
                     distanceToCampus,
                 )}.`,
             );
-            return;
-        }
-
-        const normalizedLotName = lotName.trim();
-        if (!normalizedLotName) {
-            setReportFeedback("Please enter a lot name.");
             return;
         }
 
@@ -273,9 +301,8 @@ export default function ParkingMap() {
                     authorization: `Bearer ${session.access_token}`,
                 },
                 body: JSON.stringify({
-                    lotName: normalizedLotName,
-                    availability,
-                    note: note.trim(),
+                    actionType: selectedAction,
+                    fullnessLevel: includeFullnessEstimate ? fullnessLevel : null,
                     reporterLatitude: position.latitude,
                     reporterLongitude: position.longitude,
                 }),
@@ -290,9 +317,6 @@ export default function ParkingMap() {
 
             const createdReport = payload.report;
             setReports((prevReports) => [createdReport, ...prevReports].slice(0, 12));
-            setLotName("");
-            setAvailability("limited");
-            setNote("");
             setReportFeedback("Report submitted and saved.");
         } catch {
             setReportFeedback("Unable to submit report right now.");
@@ -489,53 +513,75 @@ export default function ParkingMap() {
                 {locationError ? <p className="mt-1 text-xs font-medium text-red-700">{locationError}</p> : null}
                 {boundaryLoadError ? <p className="mt-1 text-xs font-medium text-red-700">{boundaryLoadError}</p> : null}
 
-                <p className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] text-slate-700">
-                    Boundary is hardcoded from <span className="font-semibold">{BOUNDARY_GEOJSON_PATH}</span>. End users cannot
-                    edit boundaries in-app.
-                </p>
-
                 <form className="mt-4 space-y-3" onSubmit={handleReportSubmit}>
                     <div>
-                        <label htmlFor="lotName" className="text-xs font-semibold uppercase tracking-wide text-slate-600">
-                            Lot name
+                        <label className="text-xs font-semibold uppercase tracking-wide text-slate-600">
+                            What are you doing?
                         </label>
-                        <input
-                            id="lotName"
-                            value={lotName}
-                            onChange={(event) => setLotName(event.target.value)}
-                            placeholder="Example: Arena Lot C"
-                            className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none ring-sky-500 focus:ring-2"
-                        />
+                        <div className="mt-2 grid grid-cols-1 gap-2">
+                            {(Object.keys(REPORT_ACTION_CONFIG) as ReportActionType[]).map((actionType) => {
+                                const isSelected = selectedAction === actionType;
+
+                                return (
+                                    <button
+                                        key={actionType}
+                                        type="button"
+                                        onClick={() => setSelectedAction(actionType)}
+                                        className={`rounded-lg border px-3 py-2 text-left text-sm font-semibold transition ${
+                                            isSelected
+                                                ? "border-emerald-500 bg-emerald-50 text-emerald-800"
+                                                : "border-slate-300 bg-white text-slate-800"
+                                        }`}
+                                    >
+                                        {REPORT_ACTION_CONFIG[actionType].label}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                        {selectedAction ? (
+                            <p className="mt-2 text-xs text-slate-600">{REPORT_ACTION_CONFIG[selectedAction].description}</p>
+                        ) : null}
                     </div>
 
                     <div>
-                        <label htmlFor="availability" className="text-xs font-semibold uppercase tracking-wide text-slate-600">
-                            Availability
+                        <label className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-600">
+                            <input
+                                type="checkbox"
+                                checked={includeFullnessEstimate}
+                                onChange={(event) => setIncludeFullnessEstimate(event.target.checked)}
+                                className="h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-500"
+                            />
+                            Add fullness estimate (optional)
                         </label>
-                        <select
-                            id="availability"
-                            value={availability}
-                            onChange={(event) => setAvailability(event.target.value as ParkingAvailability)}
-                            className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none ring-sky-500 focus:ring-2"
-                        >
-                            <option value="open">Open</option>
-                            <option value="limited">Limited</option>
-                            <option value="full">Full</option>
-                        </select>
-                    </div>
 
-                    <div>
-                        <label htmlFor="note" className="text-xs font-semibold uppercase tracking-wide text-slate-600">
-                            Optional note
-                        </label>
-                        <textarea
-                            id="note"
-                            value={note}
-                            onChange={(event) => setNote(event.target.value)}
-                            placeholder="Short detail about traffic or queue..."
-                            rows={2}
-                            className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none ring-sky-500 focus:ring-2"
-                        />
+                        {includeFullnessEstimate ? (
+                            <div className="mt-2 rounded-lg border border-slate-200 bg-white p-3">
+                                <input
+                                    type="range"
+                                    min={1}
+                                    max={5}
+                                    step={1}
+                                    value={fullnessLevel}
+                                    onChange={(event) => setFullnessLevel(Number(event.target.value))}
+                                    className="w-full accent-sky-600"
+                                />
+
+                                <div className="mt-1 flex justify-between text-[10px] font-semibold text-slate-500">
+                                    <span>1</span>
+                                    <span>2</span>
+                                    <span>3</span>
+                                    <span>4</span>
+                                    <span>5</span>
+                                </div>
+
+                                <p className="mt-2 text-xs text-slate-700">
+                                    <span className="font-semibold">{fullnessLevel}/5:</span>{" "}
+                                    {FULLNESS_DESCRIPTIONS[fullnessLevel]}
+                                </p>
+                            </div>
+                        ) : (
+                            <p className="mt-1 text-xs text-slate-600">No fullness estimate will be attached to this update.</p>
+                        )}
                     </div>
 
                     <button
@@ -543,14 +589,14 @@ export default function ParkingMap() {
                         disabled={!canSubmitReport}
                         className="w-full rounded-lg bg-sky-600 px-3 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-400"
                     >
-                        {isSubmittingReport ? "Submitting..." : "Submit report"}
+                        {isSubmittingReport ? "Submitting..." : "Submit update"}
                     </button>
                 </form>
 
                 {reportFeedback ? <p className="mt-2 text-xs font-medium text-slate-700">{reportFeedback}</p> : null}
 
                 <div className="mt-5 border-t border-slate-300 pt-4">
-                    <h3 className="text-sm font-semibold text-slate-900">Latest reports</h3>
+                    <h3 className="text-sm font-semibold text-slate-900">Latest updates</h3>
                     {reportsLoadError ? <p className="mt-1 text-xs font-medium text-red-700">{reportsLoadError}</p> : null}
                     {isLoadingReports ? (
                         <p className="mt-1 text-xs text-slate-600">Loading reports...</p>
@@ -560,9 +606,8 @@ export default function ParkingMap() {
                         <ul className="mt-2 space-y-2">
                             {reports.map((report) => (
                                 <li key={report.id} className="rounded-lg border border-slate-300 bg-white p-2">
-                                    <p className="text-xs font-semibold text-slate-800">{report.lotName}</p>
+                                    <p className="text-xs font-semibold text-slate-800">{formatActionLabel(report.actionType)}</p>
                                     <p className="text-xs text-slate-600">
-                                        {formatAvailabilityLabel(report.availability)} •{" "}
                                         {new Date(report.createdAt).toLocaleTimeString()} •{" "}
                                         {formatDistance(report.distanceToCampusMeters)}
                                     </p>
@@ -570,7 +615,16 @@ export default function ParkingMap() {
                                         by <span className="font-semibold">{report.reporterName}</span> • {report.reporterPoints}{" "}
                                         pts
                                     </p>
-                                    {report.note ? <p className="mt-1 text-xs text-slate-700">{report.note}</p> : null}
+                                    {report.fullnessLevel ? (
+                                        <p className="mt-1 text-xs text-slate-700">
+                                            Fullness {report.fullnessLevel}/5: {FULLNESS_DESCRIPTIONS[report.fullnessLevel]}
+                                        </p>
+                                    ) : (
+                                        <p className="mt-1 text-xs text-slate-500">No fullness estimate provided.</p>
+                                    )}
+                                    <p className="mt-1 text-[10px] uppercase tracking-wide text-slate-500">
+                                        Signal: {formatAvailabilityLabel(report.availability)}
+                                    </p>
                                 </li>
                             ))}
                         </ul>

@@ -1,11 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { getSupabaseBrowserClient } from "../lib/supabase";
 
 export default function LandingPage() {
-    const router = useRouter();
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState("");
 
@@ -22,7 +20,7 @@ export default function LandingPage() {
                 },
             });
             if (err) setError(err.message);
-        } catch (err) {
+        } catch {
             setError("Failed to sign in with Google. Supabase may not be configured.");
         } finally {
             setIsLoading(false);
@@ -83,7 +81,8 @@ export default function LandingPage() {
 
             <style jsx>{`
                 @keyframes blob {
-                    0%, 100% {
+                    0%,
+                    100% {
                         transform: translate(0, 0) scale(1);
                     }
                     33% {

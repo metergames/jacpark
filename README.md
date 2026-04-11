@@ -30,11 +30,13 @@ Run both SQL migrations in your Supabase Postgres database:
 
 - `supabase/migrations/20260411_create_parking_reports.sql`
 - `supabase/migrations/20260411_add_profiles_and_user_reports.sql`
+- `supabase/migrations/20260411_add_report_action_and_fullness.sql`
 
 This creates:
 
 - `parking_reports`
 - `profiles` (name + points)
+- `action_type` + optional `fullness_level` on parking reports
 - automatic profile creation for new auth users
 - automatic point increment when a report is submitted
 

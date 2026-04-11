@@ -6,11 +6,14 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 type ParkingAvailability = "open" | "limited" | "full";
+type ReportActionType = "parked" | "leaving" | "observing";
 
 type ParkingReportRow = {
     id: string;
     lot_name: string;
     availability: ParkingAvailability;
+    action_type: ReportActionType;
+    fullness_level: number | null;
     note: string | null;
     distance_to_campus_meters: number;
     created_at: string;
@@ -31,6 +34,8 @@ type ApiReport = {
     id: string;
     lotName: string;
     availability: ParkingAvailability;
+    actionType: ReportActionType;
+    fullnessLevel: number | null;
     note: string;
     distanceToCampusMeters: number;
     createdAt: string;
@@ -40,9 +45,9 @@ type ApiReport = {
 };
 
 const REPORT_COLUMNS =
-    "id, lot_name, availability, note, distance_to_campus_meters, created_at, user_id, profiles(display_name, points)";
+    "id, lot_name, availability, action_type, fullness_level, note, distance_to_campus_meters, created_at, user_id, profiles(display_name, points)";
 
-const allowedAvailability: ReadonlySet<ParkingAvailability> = new Set(["open", "limited", "full"]);
+const allowedActionTypes: ReadonlySet<ReportActionType> = new Set(["parked", "leaving", "observing"]);
 
 const isFiniteNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 
@@ -54,6 +59,22 @@ const parseLimit = (value: string | null): number => {
     }
 
     return Math.min(Math.max(parsed, 1), 50);
+};
+
+const deriveAvailabilityFromFullness = (fullnessLevel: number | null): ParkingAvailability => {
+    if (fullnessLevel === null) {
+        return "limited";
+    }
+
+    if (fullnessLevel <= 2) {
+        return "open";
+    }
+
+    if (fullnessLevel === 3) {
+        return "limited";
+    }
+
+    return "full";
 };
 
 const parseBearerToken = (request: Request): string | null => {
@@ -107,6 +128,8 @@ const toApiReport = (row: ParkingReportRow): ApiReport => {
         id: row.id,
         lotName: row.lot_name,
         availability: row.availability,
+        actionType: row.action_type,
+        fullnessLevel: row.fullness_level,
         note: row.note ?? "",
         distanceToCampusMeters: row.distance_to_campus_meters,
         createdAt: row.created_at,
@@ -161,18 +184,24 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "You must be signed in to submit reports." }, { status: 401 });
     }
 
-    const lotName = typeof reportData.lotName === "string" ? reportData.lotName.trim() : "";
-    const availability = reportData.availability;
-    const note = typeof reportData.note === "string" ? reportData.note.trim().slice(0, 500) : "";
+    const actionType = reportData.actionType;
+    const fullnessLevelValue = reportData.fullnessLevel;
     const reporterLatitude = reportData.reporterLatitude;
     const reporterLongitude = reportData.reporterLongitude;
 
-    if (lotName.length < 2 || lotName.length > 120) {
-        return NextResponse.json({ error: "Lot name must be between 2 and 120 characters." }, { status: 400 });
+    if (typeof actionType !== "string" || !allowedActionTypes.has(actionType as ReportActionType)) {
+        return NextResponse.json({ error: "Invalid action type." }, { status: 400 });
     }
 
-    if (typeof availability !== "string" || !allowedAvailability.has(availability as ParkingAvailability)) {
-        return NextResponse.json({ error: "Invalid availability value." }, { status: 400 });
+    const fullnessLevel =
+        fullnessLevelValue === null || typeof fullnessLevelValue === "undefined"
+            ? null
+            : Number.isInteger(fullnessLevelValue)
+              ? Number(fullnessLevelValue)
+              : NaN;
+
+    if (fullnessLevel !== null && (Number.isNaN(fullnessLevel) || fullnessLevel < 1 || fullnessLevel > 5)) {
+        return NextResponse.json({ error: "Fullness level must be an integer from 1 to 5." }, { status: 400 });
     }
 
     if (!isFiniteNumber(reporterLatitude) || !isFiniteNumber(reporterLongitude)) {
@@ -232,9 +261,11 @@ export async function POST(request: Request) {
         const { data, error } = await supabase
             .from("parking_reports")
             .insert({
-                lot_name: lotName,
-                availability,
-                note,
+                lot_name: "John Abbott Parking",
+                availability: deriveAvailabilityFromFullness(fullnessLevel),
+                action_type: actionType,
+                fullness_level: fullnessLevel,
+                note: "",
                 user_id: user.id,
                 reporter_latitude: reporterLatitude,
                 reporter_longitude: reporterLongitude,
