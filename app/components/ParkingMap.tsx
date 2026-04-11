@@ -8,6 +8,8 @@ import mapboxgl from "mapbox-gl";
 import useCampusProximity from "../hooks/useCampusProximity";
 import { CAMPUS_RADIUS_METERS } from "../lib/geo";
 import { getSupabaseBrowserClient } from "../lib/supabaseBrowser";
+import UserDashboard from "./UserDashboard";
+import SettingsModal from "./SettingsModal";
 import "mapbox-gl/dist/mapbox-gl.css";
 
 type LngLatTuple = [number, number];
@@ -150,6 +152,8 @@ export default function ParkingMap() {
     const [authFeedback, setAuthFeedback] = useState<string>("");
     const [isStartingGoogleSignIn, setIsStartingGoogleSignIn] = useState<boolean>(false);
     const [isSigningOut, setIsSigningOut] = useState<boolean>(false);
+    const [showDashboard, setShowDashboard] = useState<boolean>(false);
+    const [showSettings, setShowSettings] = useState<boolean>(false);
 
     const [selectedAction, setSelectedAction] = useState<ReportActionType | null>(null);
     const [includeFullnessEstimate, setIncludeFullnessEstimate] = useState<boolean>(false);
@@ -475,9 +479,18 @@ export default function ParkingMap() {
                     <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-700">Account</h3>
                     {isAuthReady ? (
                         session ? (
-                            <p className="mt-1 text-xs text-slate-700">
-                                Signed in as <span className="font-semibold">{sessionDisplayName}</span>
-                            </p>
+                            <div className="mt-3 space-y-2">
+                                <p className="text-xs text-slate-700">
+                                    Signed in as <span className="font-semibold">{sessionDisplayName}</span>
+                                </p>
+                                <button
+                                    type="button"
+                                    onClick={() => setShowDashboard(!showDashboard)}
+                                    className="w-full rounded-lg bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-100 transition"
+                                >
+                                    👤 View Profile
+                                </button>
+                            </div>
                         ) : (
                             <p className="mt-1 text-xs text-slate-700">Sign in with Google to submit reports.</p>
                         )
@@ -485,20 +498,6 @@ export default function ParkingMap() {
                         <p className="mt-1 text-xs text-slate-700">Checking session...</p>
                     )}
 
-                    <button
-                        type="button"
-                        onClick={session ? handleSignOut : handleGoogleSignIn}
-                        disabled={isStartingGoogleSignIn || isSigningOut}
-                        className="mt-2 w-full rounded-lg bg-slate-800 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                        {session
-                            ? isSigningOut
-                                ? "Signing out..."
-                                : "Sign out"
-                            : isStartingGoogleSignIn
-                              ? "Redirecting to Google..."
-                              : "Sign in with Google"}
-                    </button>
                     {authFeedback ? <p className="mt-2 text-xs font-medium text-red-700">{authFeedback}</p> : null}
                 </div>
 
@@ -631,6 +630,23 @@ export default function ParkingMap() {
                     )}
                 </div>
             </aside>
+
+            {showDashboard && (
+                <UserDashboard
+                    session={session}
+                    onSignOut={handleSignOut}
+                    isSigningOut={isSigningOut}
+                    onSettingsClick={() => setShowSettings(true)}
+                    onClose={() => setShowDashboard(false)}
+                />
+            )}
+
+            {showSettings && (
+                <SettingsModal
+                    session={session}
+                    onClose={() => setShowSettings(false)}
+                />
+            )}
         </section>
     );
 }
