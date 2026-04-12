@@ -222,8 +222,8 @@ export async function POST(request: Request) {
 
     const actionTypeValue = reportData.actionType;
     const fullnessLevelValue = reportData.fullnessLevel;
-    const reporterLatitude = reportData.reporterLatitude;
-    const reporterLongitude = reportData.reporterLongitude;
+    const reporterLatitudeValue = reportData.reporterLatitude;
+    const reporterLongitudeValue = reportData.reporterLongitude;
 
     if (typeof actionTypeValue !== "string" || !allowedActionTypes.has(actionTypeValue as ReportActionType)) {
         return NextResponse.json({ error: "Invalid action type." }, { status: 400 });
@@ -237,29 +237,24 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "Fullness level must be an integer from 1 to 5." }, { status: 400 });
     }
 
-    if (!isFiniteNumber(reporterLatitude) || !isFiniteNumber(reporterLongitude)) {
+    const hasSuppliedCoordinates =
+        isFiniteNumber(reporterLatitudeValue) &&
+        isFiniteNumber(reporterLongitudeValue) &&
+        reporterLatitudeValue >= -90 &&
+        reporterLatitudeValue <= 90 &&
+        reporterLongitudeValue >= -180 &&
+        reporterLongitudeValue <= 180;
+
+    if (actionType !== "leaving" && !hasSuppliedCoordinates) {
         return NextResponse.json({ error: "Invalid reporter coordinates." }, { status: 400 });
     }
 
-    if (reporterLatitude < -90 || reporterLatitude > 90 || reporterLongitude < -180 || reporterLongitude > 180) {
-        return NextResponse.json({ error: "Coordinates are out of range." }, { status: 400 });
-    }
-
-    const reporterLocation: LatLng = {
-        latitude: reporterLatitude,
-        longitude: reporterLongitude,
-    };
-
-    const distanceToCampus = haversineDistanceMeters(reporterLocation, JOHN_ABBOTT_CENTER);
-
-    if (distanceToCampus > CAMPUS_RADIUS_METERS) {
-        return NextResponse.json(
-            {
-                error: `Reporting is restricted to users within ${CAMPUS_RADIUS_METERS} meters of campus.`,
-            },
-            { status: 403 },
-        );
-    }
+    const suppliedReporterLocation: LatLng | null = hasSuppliedCoordinates
+        ? {
+              latitude: reporterLatitudeValue,
+              longitude: reporterLongitudeValue,
+          }
+        : null;
 
     try {
         const supabase = getSupabaseServerClient();
@@ -324,6 +319,50 @@ export async function POST(request: Request) {
             );
         }
 
+        let reporterLocation: LatLng;
+
+        if (actionType === "leaving") {
+            const { data: latestParkedData, error: latestParkedError } = await supabase
+                .from("parking_reports")
+                .select("reporter_latitude, reporter_longitude")
+                .eq("user_id", user.id)
+                .eq("action_type", "parked")
+                .order("created_at", { ascending: false })
+                .limit(1)
+                .maybeSingle<{ reporter_latitude: number; reporter_longitude: number }>();
+
+            if (latestParkedError) {
+                return NextResponse.json({ error: "Failed to load parked location." }, { status: 500 });
+            }
+
+            if (!latestParkedData) {
+                return NextResponse.json(
+                    {
+                        error: "No parked location found to close out. Submit a parked update first.",
+                    },
+                    { status: 409 },
+                );
+            }
+
+            reporterLocation = {
+                latitude: latestParkedData.reporter_latitude,
+                longitude: latestParkedData.reporter_longitude,
+            };
+        } else {
+            reporterLocation = suppliedReporterLocation as LatLng;
+        }
+
+        const distanceToCampus = haversineDistanceMeters(reporterLocation, JOHN_ABBOTT_CENTER);
+
+        if (actionType !== "leaving" && distanceToCampus > CAMPUS_RADIUS_METERS) {
+            return NextResponse.json(
+                {
+                    error: `Reporting is restricted to users within ${CAMPUS_RADIUS_METERS} meters of campus.`,
+                },
+                { status: 403 },
+            );
+        }
+
         if (actionType === "observing") {
             const { data: latestObservingData, error: latestObservingError } = await supabase
                 .from("parking_reports")
@@ -368,8 +407,8 @@ export async function POST(request: Request) {
                 fullness_level: fullnessLevel,
                 note: "",
                 user_id: user.id,
-                reporter_latitude: reporterLatitude,
-                reporter_longitude: reporterLongitude,
+                reporter_latitude: reporterLocation.latitude,
+                reporter_longitude: reporterLocation.longitude,
                 distance_to_campus_meters: distanceToCampus,
             })
             .select(REPORT_COLUMNS)

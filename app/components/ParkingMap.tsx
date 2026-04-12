@@ -62,8 +62,9 @@ const REPORTS_HEATMAP_SOURCE_ID = "parking-reports-heatmap";
 const REPORTS_HEATMAP_LAYER_ID = "parking-reports-heatmap-layer";
 const REPORTS_HEATMAP_POINTS_LAYER_ID = "parking-reports-points-layer";
 const HEATMAP_REPORTS_LIMIT = 120;
-const HEATMAP_PRIVACY_CELL_METERS = 68;
-const HEATMAP_MERGE_DISTANCE_MULTIPLIER = 1.9;
+const HEATMAP_PRIVACY_CELL_METERS = 44;
+const HEATMAP_CELL_CENTER_BLEND = 0.22;
+const HEATMAP_MERGE_DISTANCE_MULTIPLIER = 1.35;
 const HEATMAP_MAX_REPORT_AGE_MS = 3 * 60 * 60 * 1000;
 const HEATMAP_BASE_HALFLIFE_MS = 50 * 60 * 1000;
 const HEATMAP_RECENT_WINDOW_MS = 12 * 60 * 1000;
@@ -544,7 +545,9 @@ export default function ParkingMap() {
                 (report) =>
                     !report.id.startsWith("optimistic-") &&
                     Number.isFinite(report.reporterLatitude) &&
-                    Number.isFinite(report.reporterLongitude),
+                    Number.isFinite(report.reporterLongitude) &&
+                    Number.isFinite(report.distanceToCampusMeters) &&
+                    report.distanceToCampusMeters <= CAMPUS_RADIUS_METERS * 1.2,
             )
             .map((report) => {
                 const timestampMs = Date.parse(report.createdAt);
@@ -589,6 +592,8 @@ export default function ParkingMap() {
         type CellBucket = {
             weightedLatitude: number;
             weightedLongitude: number;
+            cellCenterLatitude: number;
+            cellCenterLongitude: number;
             totalImportance: number;
             weightedSignal: number;
             weightedSignalSquared: number;
@@ -626,8 +631,10 @@ export default function ParkingMap() {
 
             if (!bucket) {
                 buckets.set(bucketKey, {
-                    weightedLatitude: centerLatitude * importance,
-                    weightedLongitude: centerLongitude * importance,
+                    weightedLatitude: report.reporterLatitude * importance,
+                    weightedLongitude: report.reporterLongitude * importance,
+                    cellCenterLatitude: centerLatitude,
+                    cellCenterLongitude: centerLongitude,
                     totalImportance: importance,
                     weightedSignal: signal * importance,
                     weightedSignalSquared: signal * signal * importance,
@@ -641,8 +648,8 @@ export default function ParkingMap() {
                 continue;
             }
 
-            bucket.weightedLatitude += centerLatitude * importance;
-            bucket.weightedLongitude += centerLongitude * importance;
+            bucket.weightedLatitude += report.reporterLatitude * importance;
+            bucket.weightedLongitude += report.reporterLongitude * importance;
             bucket.totalImportance += importance;
             bucket.weightedSignal += signal * importance;
             bucket.weightedSignalSquared += signal * signal * importance;
@@ -708,9 +715,16 @@ export default function ParkingMap() {
                     return null;
                 }
 
+                const centroidLatitude = bucket.weightedLatitude / bucket.totalImportance;
+                const centroidLongitude = bucket.weightedLongitude / bucket.totalImportance;
+                const blendedLatitude =
+                    centroidLatitude * (1 - HEATMAP_CELL_CENTER_BLEND) + bucket.cellCenterLatitude * HEATMAP_CELL_CENTER_BLEND;
+                const blendedLongitude =
+                    centroidLongitude * (1 - HEATMAP_CELL_CENTER_BLEND) + bucket.cellCenterLongitude * HEATMAP_CELL_CENTER_BLEND;
+
                 return {
-                    latitude: bucket.weightedLatitude / bucket.totalImportance,
-                    longitude: bucket.weightedLongitude / bucket.totalImportance,
+                    latitude: blendedLatitude,
+                    longitude: blendedLongitude,
                     importance,
                     confidence,
                     pressure,
@@ -838,8 +852,8 @@ export default function ParkingMap() {
             Boolean(selectedAction) &&
             fullnessLevel !== null &&
             !isSelectedActionDisabled &&
-            isNearCampus &&
-            !locationError &&
+            (selectedAction === "leaving" || isNearCampus) &&
+            (selectedAction === "leaving" || !locationError) &&
             !isSubmittingReport,
         [session, selectedAction, fullnessLevel, isSelectedActionDisabled, isNearCampus, locationError, isSubmittingReport],
     );
@@ -1003,12 +1017,12 @@ export default function ParkingMap() {
             return;
         }
 
-        if (locationError) {
+        if (selectedAction !== "leaving" && locationError) {
             setReportFeedback(locationError);
             return;
         }
 
-        if (!isNearCampus) {
+        if (selectedAction !== "leaving" && !isNearCampus) {
             setReportFeedback(
                 `Reporting is restricted to users within ${CAMPUS_RADIUS_METERS} m of campus. Current distance: ${formatDistance(
                     distanceToCampus,
@@ -1030,7 +1044,13 @@ export default function ParkingMap() {
         setIsSubmittingReport(true);
 
         try {
-            const reporterLocation = await resolveReporterLocation(currentLocation);
+            const reporterLocation =
+                actionToSubmit === "leaving"
+                    ? (currentLocation ?? {
+                          latitude: JOHN_ABBOTT_CENTER[1],
+                          longitude: JOHN_ABBOTT_CENTER[0],
+                      })
+                    : await resolveReporterLocation(currentLocation);
 
             const optimisticReport = buildOptimisticReport(actionToSubmit, fullnessToSubmit, distanceToCampus, reporterLocation);
 
@@ -1294,6 +1314,25 @@ export default function ParkingMap() {
         panelTouchStartYRef.current = null;
     }, [selectedAction]);
 
+    useEffect(() => {
+        if (!selectedAction) {
+            return;
+        }
+
+        const htmlElement = document.documentElement;
+        const bodyElement = document.body;
+        const previousHtmlOverscroll = htmlElement.style.overscrollBehaviorY;
+        const previousBodyOverscroll = bodyElement.style.overscrollBehaviorY;
+
+        htmlElement.style.overscrollBehaviorY = "none";
+        bodyElement.style.overscrollBehaviorY = "none";
+
+        return () => {
+            htmlElement.style.overscrollBehaviorY = previousHtmlOverscroll;
+            bodyElement.style.overscrollBehaviorY = previousBodyOverscroll;
+        };
+    }, [selectedAction]);
+
     const handlePanelTouchStart = (event: TouchEvent<HTMLDivElement>): void => {
         const touchPoint = event.touches[0];
 
@@ -1310,6 +1349,8 @@ export default function ParkingMap() {
             return;
         }
 
+        event.preventDefault();
+
         const touchPoint = event.touches[0];
 
         if (!touchPoint) {
@@ -1318,10 +1359,6 @@ export default function ParkingMap() {
 
         const swipeDistance = Math.max(0, touchPoint.clientY - panelTouchStartYRef.current);
         setPanelSwipeOffsetY(swipeDistance);
-
-        if (swipeDistance > 0) {
-            event.preventDefault();
-        }
     };
 
     const handlePanelTouchEnd = (): void => {
@@ -1556,7 +1593,7 @@ export default function ParkingMap() {
                         ["coalesce", ["get", "weight"], 0],
                         ["interpolate", ["linear"], ["coalesce", ["get", "confidence"], 0.4], 0, 0.25, 1, 1],
                     ],
-                    "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 9, 1, 12, 1.35, 15, 1.75, 18, 2.2],
+                    "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 9, 0.9, 12, 1.2, 15, 1.45, 18, 1.75],
                     "heatmap-color": [
                         "interpolate",
                         ["linear"],
@@ -1572,8 +1609,8 @@ export default function ParkingMap() {
                         1,
                         "#b41135",
                     ],
-                    "heatmap-radius": ["interpolate", ["exponential", 1.6], ["zoom"], 9, 14, 12, 30, 15, 68, 18, 132, 20, 190],
-                    "heatmap-opacity": ["interpolate", ["linear"], ["zoom"], 9, 0.76, 13, 0.88, 17, 0.95, 20, 0.84],
+                    "heatmap-radius": ["interpolate", ["exponential", 1.35], ["zoom"], 9, 10, 12, 20, 15, 38, 18, 70, 20, 100],
+                    "heatmap-opacity": ["interpolate", ["linear"], ["zoom"], 9, 0.72, 13, 0.84, 17, 0.9, 20, 0.8],
                 },
             };
 
@@ -1657,7 +1694,8 @@ export default function ParkingMap() {
                         animation: "slideUp 0.3s ease-out",
                         transform: `translateY(${panelSwipeOffsetY}px)`,
                         transition: isPanelDragging ? "none" : "transform 0.18s ease",
-                        touchAction: "pan-x",
+                        touchAction: "none",
+                        overscrollBehaviorY: "contain",
                     }}
                     onTouchStart={handlePanelTouchStart}
                     onTouchMove={handlePanelTouchMove}
