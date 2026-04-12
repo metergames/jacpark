@@ -30,6 +30,8 @@ export default function LandingPage() {
     const [error, setError] = useState("");
     const [isCheckingAuth, setIsCheckingAuth] = useState(true);
     const [installError, setInstallError] = useState("");
+    const [isIosDevice, setIsIosDevice] = useState(false);
+    const [showIosInstallGuide, setShowIosInstallGuide] = useState(false);
     const [canInstallPwa, setCanInstallPwa] = useState(false);
     const [deferredInstallPrompt, setDeferredInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
 
@@ -59,6 +61,12 @@ export default function LandingPage() {
         if (typeof window === "undefined") {
             return;
         }
+
+        const userAgent = window.navigator.userAgent || "";
+        const platform = window.navigator.platform || "";
+        const isTouchMac = platform === "MacIntel" && window.navigator.maxTouchPoints > 1;
+        const detectedIos = /iPad|iPhone|iPod/.test(userAgent) || isTouchMac;
+        setIsIosDevice(detectedIos);
 
         if (isStandaloneAppDisplayMode()) {
             setCanInstallPwa(false);
@@ -128,6 +136,11 @@ export default function LandingPage() {
     };
 
     const handleInstallPwa = async () => {
+        if (isIosDevice && !deferredInstallPrompt) {
+            setShowIosInstallGuide(true);
+            return;
+        }
+
         if (!deferredInstallPrompt) {
             return;
         }
@@ -147,6 +160,27 @@ export default function LandingPage() {
 
     return (
         <div className="min-h-screen bg-[#0a0a0f] flex items-center justify-center p-4">
+            {showIosInstallGuide ? (
+                <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/60 p-4">
+                    <div className="w-full max-w-sm rounded-2xl border border-gray-700 bg-[#111118] p-6 text-white shadow-2xl">
+                        <h2 className="text-lg font-bold">Install Omnilots on iPhone</h2>
+                        <p className="mt-3 text-sm text-gray-300">Use Safari, then follow these steps:</p>
+                        <ol className="mt-3 list-decimal space-y-2 pl-5 text-sm text-gray-200">
+                            <li>Tap the Share button in Safari.</li>
+                            <li>Scroll and tap Add to Home Screen.</li>
+                            <li>Tap Add to install Omnilots.</li>
+                        </ol>
+                        <button
+                            type="button"
+                            onClick={() => setShowIosInstallGuide(false)}
+                            className="mt-5 w-full rounded-lg bg-[#5ce786] px-4 py-2 font-semibold text-black transition hover:bg-[#9bfea8]"
+                        >
+                            Got it
+                        </button>
+                    </div>
+                </div>
+            ) : null}
+
             {/* Background gradient */}
             <div className="fixed inset-0 -z-10 overflow-hidden">
                 <div
@@ -193,7 +227,7 @@ export default function LandingPage() {
                             {isLoading ? "Signing in..." : "Continue with Google"}
                         </button>
 
-                        {canInstallPwa && (
+                        {(canInstallPwa || isIosDevice) && (
                             <button
                                 onClick={handleInstallPwa}
                                 className="mt-3 w-full rounded-lg border border-[#5ce786]/60 bg-transparent px-4 py-3 font-semibold text-[#5ce786] transition hover:border-[#9bfea8] hover:text-[#9bfea8]"
@@ -201,6 +235,12 @@ export default function LandingPage() {
                                 Install Omnilots App
                             </button>
                         )}
+
+                        {isIosDevice && !canInstallPwa ? (
+                            <p className="mt-2 text-center text-xs text-gray-500">
+                                iOS installs from Safari via Share to Add to Home Screen.
+                            </p>
+                        ) : null}
 
                         {installError && <p className="mt-3 text-center text-sm text-red-500">{installError}</p>}
 
