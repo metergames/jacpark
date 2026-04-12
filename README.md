@@ -1,6 +1,6 @@
-# JACPark
+# Omnilots
 
-JACPark is a mobile-first map/reporting app for John Abbott parking status.
+Omnilots is a mobile-first map/reporting app for campus parking status.
 
 ## Environment variables
 

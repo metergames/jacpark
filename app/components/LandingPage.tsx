@@ -75,7 +75,7 @@ export default function LandingPage() {
                 <div className="w-full max-w-md">
                     {/* Header */}
                     <div className="text-center mb-12">
-                        <h1 className="text-5xl font-bold text-white mb-3">JACPark</h1>
+                        <h1 className="text-5xl font-bold text-white mb-3">Omnilots</h1>
                         <p className="text-gray-400 text-lg">Crowdsourced parking for John Abbott</p>
                     </div>
 

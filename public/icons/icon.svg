@@ -1,0 +1,42 @@
+<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <!-- Yellow location pin background -->
+  <defs>
+    <radialGradient id="pinGradient" cx="35%" cy="35%">
+      <stop offset="0%" style="stop-color:#FFC857;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#F4A01A;stop-opacity:1" />
+    </radialGradient>
+  </defs>
+  
+  <!-- Pin shadow -->
+  <path d="M 256 80 C 180 80 120 140 120 220 C 120 300 256 460 256 460 C 256 460 392 300 392 220 C 392 140 332 80 256 80 Z" fill="url(#pinGradient)" />
+  
+  <!-- White circle background -->
+  <circle cx="256" cy="200" r="90" fill="white" />
+  
+  <!-- Dark blue car icon -->
+  <g transform="translate(256, 200)">
+    <!-- Car body -->
+    <path d="M -45 -10 L -55 10 L -50 30 L 50 30 L 55 10 L 45 -10 Q 0 -25 0 -25 Q 0 -25 -45 -10 Z" fill="#003366" stroke="none"/>
+    
+    <!-- Car top/roof -->
+    <ellipse cx="0" cy="-5" rx="35" ry="20" fill="#003366"/>
+    
+    <!-- Left headlight -->
+    <ellipse cx="-35" cy="-5" rx="12" ry="15" fill="white"/>
+    
+    <!-- Right headlight -->
+    <ellipse cx="35" cy="-5" rx="12" ry="15" fill="white"/>
+    
+    <!-- Left window -->
+    <rect x="-30" y="-15" width="20" height="12" fill="white" opacity="0.3"/>
+    
+    <!-- Right window -->
+    <rect x="10" y="-15" width="20" height="12" fill="white" opacity="0.3"/>
+    
+    <!-- Left wheel -->
+    <circle cx="-30" cy="30" r="14" fill="#333"/>
+    
+    <!-- Right wheel -->
+    <circle cx="30" cy="30" r="14" fill="#333"/>
+  </g>
+</svg>

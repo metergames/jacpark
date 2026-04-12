@@ -14,17 +14,17 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-    applicationName: "JACPark",
+    applicationName: "Omnilots",
     title: {
-        default: "JACPark",
-        template: "%s | JACPark",
+        default: "Omnilots",
+        template: "%s | Omnilots",
     },
-    description: "Crowdsourced parking updates for John Abbott College, built for fast mobile reporting.",
+    description: "Crowdsourced parking updates for campus parking, built for fast mobile reporting.",
     manifest: "/manifest.json",
     appleWebApp: {
         capable: true,
         statusBarStyle: "black-translucent",
-        title: "JACPark",
+        title: "Omnilots",
     },
     formatDetection: {
         telephone: false,
@@ -61,7 +61,7 @@ export const viewport: Viewport = {
     width: "device-width",
     initialScale: 1,
     viewportFit: "cover",
-    themeColor: "#0b0f19",
+    themeColor: "#F4A01A",
     colorScheme: "dark",
 };
 

@@ -81,7 +81,7 @@ const USER_LOCATION_MARKER_CLASS_NAME = "jac-user-location-marker";
 const SUBMIT_RETRY_BASE_DELAY_MS = 400;
 const SUBMIT_RETRY_MAX_ATTEMPTS = 3;
 const DEV_REPORTS_RESET_ENABLED = process.env.NODE_ENV !== "production";
-const REPORTS_RESET_KEY_HEADER = "x-jacpark-reset-key";
+const REPORTS_RESET_KEY_HEADER = "x-omnilots-reset-key";
 
 const TRANSIENT_SUBMIT_STATUSES: ReadonlySet<number> = new Set([408, 425, 429, 500, 502, 503, 504]);
 
@@ -1811,7 +1811,11 @@ export default function ParkingMap() {
             {/* Top bar: minimal info */}
             <div
                 className="absolute top-0 left-0 right-0 z-10 px-4 py-3 sm:py-4 flex items-center justify-between"
-                style={{ backgroundColor: "rgba(0,0,0,0.3)", backdropFilter: "blur(8px)" }}
+                style={{ 
+                    backgroundColor: "rgba(0,0,0,0.3)", 
+                    backdropFilter: "blur(8px)",
+                    paddingTop: "calc(0.75rem + max(0px, env(safe-area-inset-top)))"
+                }}
             >
                 <div className="flex items-center gap-2">
                     {isNearCampus ? (

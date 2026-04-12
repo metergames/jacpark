@@ -1,7 +1,7 @@
 {
     "id": "/",
-    "name": "JACPark",
-    "short_name": "JACPark",
+    "name": "Omnilots",
+    "short_name": "Omnilots",
     "description": "Crowdsourced parking reports for John Abbott College.",
     "lang": "en-CA",
     "start_url": "/",
@@ -10,7 +10,7 @@
     "display_override": ["fullscreen", "standalone"],
     "orientation": "portrait",
     "background_color": "#0b0f19",
-    "theme_color": "#0b0f19",
+    "theme_color": "#F4A01A",
     "icons": [
         {
             "src": "/icons/icon-192x192.png",
