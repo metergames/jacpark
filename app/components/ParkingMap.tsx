@@ -6,7 +6,7 @@ import type { FeatureCollection, MultiPolygon, Polygon } from "geojson";
 import type { Session } from "@supabase/supabase-js";
 import mapboxgl from "mapbox-gl";
 import useCampusProximity from "../hooks/useCampusProximity";
-import { CAMPUS_RADIUS_METERS, type LatLng } from "../lib/geo";
+import { CAMPUS_RADIUS_METERS, haversineDistanceMeters, type LatLng } from "../lib/geo";
 import { getSupabaseBrowserClient } from "../lib/supabaseBrowser";
 import { useTheme } from "../lib/ThemeContext";
 import UserDashboard from "./UserDashboard";
@@ -61,8 +61,16 @@ const BOUNDARY_GEOJSON_PATH = "/boundaries/jac-parking-boundaries.geojson";
 const REPORTS_HEATMAP_SOURCE_ID = "parking-reports-heatmap";
 const REPORTS_HEATMAP_LAYER_ID = "parking-reports-heatmap-layer";
 const REPORTS_HEATMAP_POINTS_LAYER_ID = "parking-reports-points-layer";
-const HEATMAP_REPORTS_LIMIT = 50;
-const HEATMAP_GROUP_CELL_METERS = 24;
+const HEATMAP_REPORTS_LIMIT = 120;
+const HEATMAP_MIN_PRIVACY_CELL_METERS = 36;
+const HEATMAP_MAX_PRIVACY_CELL_METERS = 140;
+const HEATMAP_MERGE_DISTANCE_MULTIPLIER = 1.9;
+const HEATMAP_MAX_REPORT_AGE_MS = 3 * 60 * 60 * 1000;
+const HEATMAP_BASE_HALFLIFE_MS = 50 * 60 * 1000;
+const HEATMAP_RECENT_WINDOW_MS = 12 * 60 * 1000;
+const HEATMAP_HIGH_ACTIVITY_WINDOW_MS = 20 * 60 * 1000;
+const HEATMAP_HIGH_ACTIVITY_THRESHOLD = 18;
+const HEATMAP_IMPORTANCE_FLOOR = 0.06;
 const FAST_REPORTS_REFRESH_INTERVAL_MS = 10000;
 const SLOW_REPORTS_REFRESH_INTERVAL_MS = 90000;
 const FAST_REFRESH_DISTANCE_METERS = 2000;
@@ -358,6 +366,51 @@ const formatDistance = (meters: number): string => {
     return `${Math.round(meters)} m`;
 };
 
+const clampNumber = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
+
+const getNormalizedFullness = (report: ParkingReport): number => {
+    if (Number.isInteger(report.fullnessLevel) && report.fullnessLevel !== null) {
+        return clampNumber((report.fullnessLevel - 1) / 4, 0, 1);
+    }
+
+    if (report.availability === "open") {
+        return 0.2;
+    }
+
+    if (report.availability === "limited") {
+        return 0.58;
+    }
+
+    return 0.9;
+};
+
+const getActionSignal = (report: ParkingReport): number => {
+    const fullnessSignal = getNormalizedFullness(report) * 2 - 1;
+
+    if (report.actionType === "parked") {
+        return clampNumber(fullnessSignal + 0.35, -1, 1);
+    }
+
+    if (report.actionType === "leaving") {
+        return clampNumber(fullnessSignal - 0.55, -1, 1);
+    }
+
+    return clampNumber(fullnessSignal, -1, 1);
+};
+
+const getZoomScaledPrivacyCellMeters = (zoom: number): number => {
+    if (zoom <= 12) {
+        return HEATMAP_MAX_PRIVACY_CELL_METERS;
+    }
+
+    if (zoom >= 19) {
+        return HEATMAP_MIN_PRIVACY_CELL_METERS;
+    }
+
+    const t = (zoom - 12) / (19 - 12);
+    return HEATMAP_MAX_PRIVACY_CELL_METERS - t * (HEATMAP_MAX_PRIVACY_CELL_METERS - HEATMAP_MIN_PRIVACY_CELL_METERS);
+};
+
 const formatAvailabilityLabel = (availability: ParkingAvailability): string => {
     if (availability === "open") {
         return "Open";
@@ -465,6 +518,7 @@ export default function ParkingMap() {
     const [panelSwipeOffsetY, setPanelSwipeOffsetY] = useState<number>(0);
     const [isPanelDragging, setIsPanelDragging] = useState<boolean>(false);
     const [isMapReady, setIsMapReady] = useState<boolean>(false);
+    const [mapZoom, setMapZoom] = useState<number>(JOHN_ABBOTT_ZOOM);
 
     const { isNearCampus, distanceToCampus, locationError, currentLocation } = useCampusProximity();
 
@@ -488,85 +542,292 @@ export default function ParkingMap() {
         return isActionDisabledForParkState(selectedAction, isUserParkedToday);
     }, [selectedAction, isUserParkedToday]);
 
-    // Memoized heatmap data: decay recent reports and group nearby points into local clusters.
+    // Complex hotspot model: privacy-safe gridding, time decay, conflict scoring, and spatial merge.
     const heatmapData = useMemo(() => {
-        const now = new Date().getTime();
-        const DECAY_HOURS = 2;
-        const DECAY_MS = DECAY_HOURS * 60 * 60 * 1000;
+        const nowMs = Date.now();
+        const privacyCellMeters = getZoomScaledPrivacyCellMeters(mapZoom);
+        const mergeDistanceMeters = privacyCellMeters * HEATMAP_MERGE_DISTANCE_MULTIPLIER;
 
-        const validReports = reports.filter(
-            (r) => !r.id.startsWith("optimistic-") && Number.isFinite(r.reporterLatitude) && Number.isFinite(r.reporterLongitude),
-        );
+        const preparedReports = reports
+            .filter(
+                (report) =>
+                    !report.id.startsWith("optimistic-") &&
+                    Number.isFinite(report.reporterLatitude) &&
+                    Number.isFinite(report.reporterLongitude),
+            )
+            .map((report) => {
+                const timestampMs = Date.parse(report.createdAt);
 
-        if (validReports.length === 0) {
+                if (Number.isNaN(timestampMs)) {
+                    return null;
+                }
+
+                const ageMs = Math.max(0, nowMs - timestampMs);
+
+                if (ageMs > HEATMAP_MAX_REPORT_AGE_MS) {
+                    return null;
+                }
+
+                return {
+                    report,
+                    timestampMs,
+                    ageMs,
+                };
+            })
+            .filter(
+                (
+                    entry,
+                ): entry is {
+                    report: ParkingReport;
+                    timestampMs: number;
+                    ageMs: number;
+                } => entry !== null,
+            );
+
+        if (preparedReports.length === 0) {
             return { type: "FeatureCollection" as const, features: [] };
         }
 
-        const buckets = new Map<
-            string,
-            {
-                totalWeight: number;
-                weightedLongitude: number;
-                weightedLatitude: number;
-                latestTimestampMs: number;
-            }
-        >();
+        const highActivityCount = preparedReports.reduce(
+            (count, entry) => count + (entry.ageMs <= HEATMAP_HIGH_ACTIVITY_WINDOW_MS ? 1 : 0),
+            0,
+        );
+        const activityFactor = clampNumber(highActivityCount / HEATMAP_HIGH_ACTIVITY_THRESHOLD, 0, 1);
+        const dynamicHalfLifeMs = HEATMAP_BASE_HALFLIFE_MS * (1 - activityFactor * 0.45);
 
-        for (const report of validReports) {
-            const timeSinceReportMs = now - new Date(report.createdAt).getTime();
-            const decayFactor = Math.max(0.1, 1 - timeSinceReportMs / DECAY_MS);
-            const intensityWeight = report.availability === "full" ? 1.0 : report.availability === "limited" ? 0.6 : 0.3;
+        type CellBucket = {
+            weightedLatitude: number;
+            weightedLongitude: number;
+            totalImportance: number;
+            weightedSignal: number;
+            weightedSignalSquared: number;
+            parkedInfluence: number;
+            leavingInfluence: number;
+            reportCount: number;
+            recentCount: number;
+            latestTimestampMs: number;
+        };
 
-            const latMeters = report.reporterLatitude * 111320;
-            const lngMeters = report.reporterLongitude * 111320 * Math.cos((report.reporterLatitude * Math.PI) / 180);
-            const cellX = Math.floor(lngMeters / HEATMAP_GROUP_CELL_METERS);
-            const cellY = Math.floor(latMeters / HEATMAP_GROUP_CELL_METERS);
+        const buckets = new Map<string, CellBucket>();
+
+        for (const entry of preparedReports) {
+            const report = entry.report;
+            const signal = getActionSignal(report);
+
+            const recencyWeight = Math.exp(-entry.ageMs / Math.max(1, dynamicHalfLifeMs));
+            const freshnessBoost = entry.ageMs <= HEATMAP_RECENT_WINDOW_MS ? 1.25 : 1;
+            const actionReliability = report.actionType === "observing" ? 1 : 0.9;
+            const importance = recencyWeight * freshnessBoost * actionReliability;
+
+            const cosLat = Math.max(0.35, Math.cos((report.reporterLatitude * Math.PI) / 180));
+            const xMeters = report.reporterLongitude * 111320 * cosLat;
+            const yMeters = report.reporterLatitude * 111320;
+
+            const cellX = Math.round(xMeters / privacyCellMeters);
+            const cellY = Math.round(yMeters / privacyCellMeters);
             const bucketKey = `${cellX}:${cellY}`;
+
+            const centerLatitude = (cellY * privacyCellMeters) / 111320;
+            const centerCosLat = Math.max(0.35, Math.cos((centerLatitude * Math.PI) / 180));
+            const centerLongitude = (cellX * privacyCellMeters) / (111320 * centerCosLat);
 
             const bucket = buckets.get(bucketKey);
 
             if (!bucket) {
                 buckets.set(bucketKey, {
-                    totalWeight: intensityWeight * decayFactor,
-                    weightedLongitude: report.reporterLongitude * intensityWeight * decayFactor,
-                    weightedLatitude: report.reporterLatitude * intensityWeight * decayFactor,
-                    latestTimestampMs: Date.parse(report.createdAt),
+                    weightedLatitude: centerLatitude * importance,
+                    weightedLongitude: centerLongitude * importance,
+                    totalImportance: importance,
+                    weightedSignal: signal * importance,
+                    weightedSignalSquared: signal * signal * importance,
+                    parkedInfluence: report.actionType === "parked" ? importance * (0.6 + 0.4 * Math.max(0, signal)) : 0,
+                    leavingInfluence: report.actionType === "leaving" ? importance * (0.6 + 0.4 * Math.max(0, -signal)) : 0,
+                    reportCount: 1,
+                    recentCount: entry.ageMs <= HEATMAP_RECENT_WINDOW_MS ? 1 : 0,
+                    latestTimestampMs: entry.timestampMs,
                 });
+
                 continue;
             }
 
-            bucket.totalWeight += intensityWeight * decayFactor;
-            bucket.weightedLongitude += report.reporterLongitude * intensityWeight * decayFactor;
-            bucket.weightedLatitude += report.reporterLatitude * intensityWeight * decayFactor;
-            bucket.latestTimestampMs = Math.max(bucket.latestTimestampMs, Date.parse(report.createdAt));
+            bucket.weightedLatitude += centerLatitude * importance;
+            bucket.weightedLongitude += centerLongitude * importance;
+            bucket.totalImportance += importance;
+            bucket.weightedSignal += signal * importance;
+            bucket.weightedSignalSquared += signal * signal * importance;
+            bucket.reportCount += 1;
+            if (entry.ageMs <= HEATMAP_RECENT_WINDOW_MS) {
+                bucket.recentCount += 1;
+            }
+
+            if (report.actionType === "parked") {
+                bucket.parkedInfluence += importance * (0.6 + 0.4 * Math.max(0, signal));
+            } else if (report.actionType === "leaving") {
+                bucket.leavingInfluence += importance * (0.6 + 0.4 * Math.max(0, -signal));
+            }
+
+            bucket.latestTimestampMs = Math.max(bucket.latestTimestampMs, entry.timestampMs);
         }
 
-        const clusteredPoints = Array.from(buckets.values()).map((bucket) => {
-            const safeWeight = bucket.totalWeight > 0 ? bucket.totalWeight : 0.1;
+        type ProtoHotspot = {
+            latitude: number;
+            longitude: number;
+            importance: number;
+            confidence: number;
+            pressure: number;
+            reportCount: number;
+            recentCount: number;
+            latestTimestampMs: number;
+        };
 
-            return {
-                longitude: bucket.weightedLongitude / safeWeight,
-                latitude: bucket.weightedLatitude / safeWeight,
-                weight: Math.min(2.6, safeWeight),
-                timestamp: new Date(bucket.latestTimestampMs).toISOString(),
-            };
-        });
+        const protoHotspots: ProtoHotspot[] = Array.from(buckets.values())
+            .map((bucket) => {
+                if (bucket.totalImportance <= 0) {
+                    return null;
+                }
+
+                const meanSignal = bucket.weightedSignal / bucket.totalImportance;
+                const meanSignalSquared = bucket.weightedSignalSquared / bucket.totalImportance;
+                const variance = Math.max(0, meanSignalSquared - meanSignal * meanSignal);
+
+                const conflictRatio = clampNumber(
+                    Math.min(bucket.parkedInfluence, bucket.leavingInfluence) / (bucket.totalImportance + 1e-6),
+                    0,
+                    1,
+                );
+
+                const disagreementPenalty = clampNumber(Math.sqrt(variance) * 0.65 + conflictRatio * 0.75, 0, 0.92);
+                const confidence = clampNumber(1 - disagreementPenalty, 0.08, 1);
+
+                const parkMomentum = clampNumber(
+                    (bucket.parkedInfluence - bucket.leavingInfluence) / (bucket.totalImportance + 1e-6),
+                    -0.55,
+                    0.55,
+                );
+
+                const supportBoost = clampNumber(bucket.recentCount / 3, 0, 1) * 0.18;
+                const stalePenalty =
+                    nowMs - bucket.latestTimestampMs > 2 * 60 * 60 * 1000 ? (bucket.recentCount > 0 ? 0.6 : 0.28) : 1;
+
+                const pressure = clampNumber(meanSignal + parkMomentum * 0.35 + supportBoost, -1, 1);
+                const reportDensityBoost = clampNumber(Math.log2(bucket.reportCount + 1) / 2.3, 0.4, 1.3);
+                const importance = clampNumber(((pressure + 1) / 2) * confidence * reportDensityBoost * stalePenalty, 0, 2.6);
+
+                if (importance < HEATMAP_IMPORTANCE_FLOOR) {
+                    return null;
+                }
+
+                return {
+                    latitude: bucket.weightedLatitude / bucket.totalImportance,
+                    longitude: bucket.weightedLongitude / bucket.totalImportance,
+                    importance,
+                    confidence,
+                    pressure,
+                    reportCount: bucket.reportCount,
+                    recentCount: bucket.recentCount,
+                    latestTimestampMs: bucket.latestTimestampMs,
+                };
+            })
+            .filter((bucket): bucket is ProtoHotspot => bucket !== null);
+
+        if (protoHotspots.length === 0) {
+            return { type: "FeatureCollection" as const, features: [] };
+        }
+
+        const mergedHotspots: Array<ProtoHotspot & { mergedCells: number }> = [];
+        const visited = new Set<number>();
+
+        for (let i = 0; i < protoHotspots.length; i += 1) {
+            if (visited.has(i)) {
+                continue;
+            }
+
+            const stack = [i];
+            visited.add(i);
+
+            let weightedLatitude = 0;
+            let weightedLongitude = 0;
+            let weightedConfidence = 0;
+            let weightedPressure = 0;
+            let totalImportance = 0;
+            let totalReports = 0;
+            let totalRecent = 0;
+            let latestTimestampMs = 0;
+            let mergedCells = 0;
+
+            while (stack.length > 0) {
+                const index = stack.pop() as number;
+                const current = protoHotspots[index];
+
+                weightedLatitude += current.latitude * current.importance;
+                weightedLongitude += current.longitude * current.importance;
+                weightedConfidence += current.confidence * current.importance;
+                weightedPressure += current.pressure * current.importance;
+                totalImportance += current.importance;
+                totalReports += current.reportCount;
+                totalRecent += current.recentCount;
+                latestTimestampMs = Math.max(latestTimestampMs, current.latestTimestampMs);
+                mergedCells += 1;
+
+                for (let j = 0; j < protoHotspots.length; j += 1) {
+                    if (visited.has(j)) {
+                        continue;
+                    }
+
+                    const candidate = protoHotspots[j];
+                    const distanceMeters = haversineDistanceMeters(
+                        {
+                            latitude: current.latitude,
+                            longitude: current.longitude,
+                        },
+                        {
+                            latitude: candidate.latitude,
+                            longitude: candidate.longitude,
+                        },
+                    );
+
+                    if (distanceMeters <= mergeDistanceMeters) {
+                        visited.add(j);
+                        stack.push(j);
+                    }
+                }
+            }
+
+            const safeImportance = Math.max(totalImportance, 1e-6);
+
+            mergedHotspots.push({
+                latitude: weightedLatitude / safeImportance,
+                longitude: weightedLongitude / safeImportance,
+                confidence: clampNumber(weightedConfidence / safeImportance, 0.08, 1),
+                pressure: clampNumber(weightedPressure / safeImportance, -1, 1),
+                importance: clampNumber(totalImportance, 0, 3.4),
+                reportCount: totalReports,
+                recentCount: totalRecent,
+                latestTimestampMs,
+                mergedCells,
+            });
+        }
 
         return {
             type: "FeatureCollection" as const,
-            features: clusteredPoints.map((pt) => ({
+            features: mergedHotspots.map((hotspot) => ({
                 type: "Feature" as const,
                 geometry: {
                     type: "Point" as const,
-                    coordinates: [pt.longitude, pt.latitude] as [number, number],
+                    coordinates: [hotspot.longitude, hotspot.latitude] as [number, number],
                 },
                 properties: {
-                    weight: pt.weight,
-                    timestamp: pt.timestamp,
+                    weight: hotspot.importance,
+                    pressure: hotspot.pressure,
+                    confidence: hotspot.confidence,
+                    reportCount: hotspot.reportCount,
+                    recentCount: hotspot.recentCount,
+                    mergedCells: hotspot.mergedCells,
+                    timestamp: new Date(hotspot.latestTimestampMs).toISOString(),
                 },
             })),
         };
-    }, [reports]);
+    }, [reports, mapZoom]);
 
     useEffect(() => {
         return () => {
@@ -1142,16 +1403,23 @@ export default function ParkingMap() {
 
         const handleMapLoad = (): void => {
             setIsMapReady(true);
+            setMapZoom(map.getZoom());
             void addBoundaryLayers();
         };
 
+        const handleZoomEnd = (): void => {
+            setMapZoom(map.getZoom());
+        };
+
         map.on("load", handleMapLoad);
+        map.on("zoomend", handleZoomEnd);
 
         return () => {
             isActive = false;
             userLocationMarkerRef.current?.remove();
             userLocationMarkerRef.current = null;
             map.off("load", handleMapLoad);
+            map.off("zoomend", handleZoomEnd);
             map.remove();
             mapRef.current = null;
         };
@@ -1245,8 +1513,12 @@ export default function ParkingMap() {
                     type: "heatmap",
                     source: REPORTS_HEATMAP_SOURCE_ID,
                     paint: {
-                        "heatmap-weight": ["coalesce", ["get", "weight"], 0.4],
-                        "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 10, 1.2, 16, 2, 20, 2.6],
+                        "heatmap-weight": [
+                            "*",
+                            ["coalesce", ["get", "weight"], 0],
+                            ["interpolate", ["linear"], ["coalesce", ["get", "confidence"], 0.4], 0, 0.25, 1, 1],
+                        ],
+                        "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 9, 1, 12, 1.35, 15, 1.75, 18, 2.2],
                         "heatmap-color": [
                             "interpolate",
                             ["linear"],
@@ -1262,29 +1534,31 @@ export default function ParkingMap() {
                             1,
                             "#b41135",
                         ],
-                        "heatmap-radius": ["interpolate", ["linear"], ["zoom"], 10, 24, 16, 44, 20, 64],
-                        "heatmap-opacity": ["interpolate", ["linear"], ["zoom"], 10, 0.65, 16, 0.95, 20, 0.75],
+                        "heatmap-radius": [
+                            "interpolate",
+                            ["exponential", 1.6],
+                            ["zoom"],
+                            9,
+                            14,
+                            12,
+                            30,
+                            15,
+                            68,
+                            18,
+                            132,
+                            20,
+                            190,
+                        ],
+                        "heatmap-opacity": ["interpolate", ["linear"], ["zoom"], 9, 0.76, 13, 0.88, 17, 0.95, 20, 0.84],
                     },
                 },
                 BOUNDARY_FILL_LAYER_ID, // Insert before boundary layer
             );
         }
 
-        // Add points layer for sparse data visibility
-        if (!map.getLayer(REPORTS_HEATMAP_POINTS_LAYER_ID)) {
-            map.addLayer(
-                {
-                    id: REPORTS_HEATMAP_POINTS_LAYER_ID,
-                    type: "circle",
-                    source: REPORTS_HEATMAP_SOURCE_ID,
-                    paint: {
-                        "circle-radius": ["interpolate", ["linear"], ["zoom"], 10, 3, 16, 6, 20, 8],
-                        "circle-color": "#ff6600",
-                        "circle-opacity": ["interpolate", ["linear"], ["zoom"], 10, 0.4, 16, 0.5, 20, 0.6],
-                    },
-                },
-                REPORTS_HEATMAP_LAYER_ID,
-            );
+        // Remove explicit point rendering to avoid exposing precise reported positions.
+        if (map.getLayer(REPORTS_HEATMAP_POINTS_LAYER_ID)) {
+            map.removeLayer(REPORTS_HEATMAP_POINTS_LAYER_ID);
         }
     }, [heatmapData, isMapReady]);
 

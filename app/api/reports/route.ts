@@ -56,7 +56,7 @@ const parseLimit = (value: string | null): number => {
         return 12;
     }
 
-    return Math.min(Math.max(parsed, 1), 50);
+    return Math.min(Math.max(parsed, 1), 150);
 };
 
 const parseSince = (value: string | null): Date => {
