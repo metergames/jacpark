@@ -101,6 +101,38 @@ const REPORT_ACTION_CONFIG: Record<ReportActionType, { label: string; descriptio
     },
 };
 
+const ACTION_BUTTON_RENDER_ORDER: ReportActionType[] = ["parked", "leaving", "observing"];
+
+const ACTION_BUTTON_ENTRANCE_DELAY_MS: Record<ReportActionType, number> = {
+    observing: 0,
+    leaving: 90,
+    parked: 180,
+};
+
+const ACTION_BUTTON_VISUALS: Record<
+    ReportActionType,
+    { gradient: string; borderColor: string; glow: string; iconSurface: string }
+> = {
+    parked: {
+        gradient: "linear-gradient(135deg, rgba(15, 163, 127, 0.94), rgba(5, 122, 85, 0.93))",
+        borderColor: "rgba(167, 243, 208, 0.58)",
+        glow: "0 16px 32px rgba(6, 95, 70, 0.42)",
+        iconSurface: "rgba(209, 250, 229, 0.25)",
+    },
+    leaving: {
+        gradient: "linear-gradient(135deg, rgba(245, 125, 32, 0.94), rgba(194, 65, 12, 0.93))",
+        borderColor: "rgba(254, 215, 170, 0.56)",
+        glow: "0 16px 32px rgba(154, 52, 18, 0.42)",
+        iconSurface: "rgba(255, 237, 213, 0.25)",
+    },
+    observing: {
+        gradient: "linear-gradient(135deg, rgba(14, 165, 233, 0.94), rgba(3, 105, 161, 0.93))",
+        borderColor: "rgba(186, 230, 253, 0.56)",
+        glow: "0 16px 32px rgba(12, 74, 110, 0.42)",
+        iconSurface: "rgba(224, 242, 254, 0.25)",
+    },
+};
+
 const FULLNESS_DESCRIPTIONS: Record<number, string> = {
     1: "Basically empty. Lots of spots available.",
     2: "Fairly open. You should find a spot quickly.",
@@ -129,33 +161,34 @@ const ACTION_CARD_STYLES: Record<ReportActionType, { selected: string; idle: str
 
 const FULLNESS_BUTTON_STYLES: Record<number, { selected: string; idle: string }> = {
     1: {
-        selected: "border-emerald-500 bg-emerald-50 text-emerald-900 dark:bg-emerald-950/45 dark:text-emerald-100",
-        idle: "border-[var(--line)] bg-[var(--surface)] text-[var(--foreground)] hover:border-emerald-400",
+        selected: "border-emerald-500 bg-emerald-100 text-emerald-950 dark:bg-emerald-950/65 dark:text-emerald-100",
+        idle: "border-[var(--line)] bg-[var(--surface)] text-[var(--foreground)] hover:border-emerald-500",
     },
     2: {
-        selected: "border-lime-500 bg-lime-50 text-lime-900 dark:bg-lime-950/45 dark:text-lime-100",
-        idle: "border-[var(--line)] bg-[var(--surface)] text-[var(--foreground)] hover:border-lime-400",
+        selected: "border-lime-500 bg-lime-100 text-lime-950 dark:bg-lime-950/65 dark:text-lime-100",
+        idle: "border-[var(--line)] bg-[var(--surface)] text-[var(--foreground)] hover:border-lime-500",
     },
     3: {
-        selected: "border-amber-500 bg-amber-50 text-amber-900 dark:bg-amber-950/45 dark:text-amber-100",
-        idle: "border-[var(--line)] bg-[var(--surface)] text-[var(--foreground)] hover:border-amber-400",
+        selected: "border-amber-500 bg-amber-100 text-amber-950 dark:bg-amber-950/65 dark:text-amber-100",
+        idle: "border-[var(--line)] bg-[var(--surface)] text-[var(--foreground)] hover:border-amber-500",
     },
     4: {
-        selected: "border-orange-500 bg-orange-50 text-orange-900 dark:bg-orange-950/45 dark:text-orange-100",
-        idle: "border-[var(--line)] bg-[var(--surface)] text-[var(--foreground)] hover:border-orange-400",
+        selected: "border-orange-600 bg-orange-200 text-orange-950 dark:bg-orange-950/70 dark:text-orange-100",
+        idle: "border-[var(--line)] bg-[var(--surface)] text-[var(--foreground)] hover:border-orange-500",
     },
     5: {
-        selected: "border-rose-500 bg-rose-50 text-rose-900 dark:bg-rose-950/45 dark:text-rose-100",
-        idle: "border-[var(--line)] bg-[var(--surface)] text-[var(--foreground)] hover:border-rose-400",
+        selected:
+            "border-red-700 bg-red-600 text-white shadow-[0_12px_24px_rgba(185,28,28,0.35)] dark:bg-red-700 dark:text-red-50",
+        idle: "border-[var(--line)] bg-[var(--surface)] text-[var(--foreground)] hover:border-red-500",
     },
 };
 
 const FULLNESS_ICON_SELECTED_COLORS: Record<number, string> = {
-    1: "#10b981",
-    2: "#84cc16",
+    1: "#16a34a",
+    2: "#65a30d",
     3: "#f59e0b",
-    4: "#f97316",
-    5: "#f43f5e",
+    4: "#ea580c",
+    5: "#b91c1c",
 };
 
 const ActionIcon = ({ actionType }: { actionType: ReportActionType }) => {
@@ -187,6 +220,25 @@ const ActionIcon = ({ actionType }: { actionType: ReportActionType }) => {
         </svg>
     );
 };
+
+const ProfileOutlineIcon = () => (
+    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round">
+        <circle cx="12" cy="7.4" r="3.1" />
+        <path d="M5.1 18.7c.85-2.75 3.32-4.68 6.02-4.68" />
+        <path d="M18.9 18.7c-.85-2.75-3.32-4.68-6.02-4.68" />
+    </svg>
+);
+
+const RecenterIcon = () => (
+    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round">
+        <circle cx="12" cy="12" r="6.4" />
+        <circle cx="12" cy="12" r="1.8" />
+        <path d="M12 1.9v2.2" />
+        <path d="M12 19.9v2.2" />
+        <path d="M1.9 12h2.2" />
+        <path d="M19.9 12h2.2" />
+    </svg>
+);
 
 const FullnessIcon = ({ level, selected }: { level: number; selected: boolean }) => (
     <svg viewBox="0 0 28 20" className="h-5 w-7" aria-hidden="true">
@@ -482,6 +534,7 @@ export default function ParkingMap() {
     const previousUpdateClearTimeoutRef = useRef<number | null>(null);
     const previousReportCountRef = useRef<number>(0);
     const notificationsInitializedRef = useRef<boolean>(false);
+    const panelCloseTimeoutRef = useRef<number | null>(null);
 
     const [session, setSession] = useState<Session | null>(null);
     const [isAuthReady, setIsAuthReady] = useState<boolean>(false);
@@ -511,7 +564,9 @@ export default function ParkingMap() {
     const [isLatestCardDragging, setIsLatestCardDragging] = useState<boolean>(false);
     const [panelSwipeOffsetY, setPanelSwipeOffsetY] = useState<number>(0);
     const [isPanelDragging, setIsPanelDragging] = useState<boolean>(false);
+    const [isPanelClosing, setIsPanelClosing] = useState<boolean>(false);
     const [isMapReady, setIsMapReady] = useState<boolean>(false);
+    const [isRecenteringMap, setIsRecenteringMap] = useState<boolean>(false);
     const [isPointEditorEnabled, setIsPointEditorEnabled] = useState<boolean>(false);
     const [devPointActionType, setDevPointActionType] = useState<ReportActionType>("observing");
     const [devPointFullnessLevel, setDevPointFullnessLevel] = useState<number>(3);
@@ -868,6 +923,10 @@ export default function ParkingMap() {
             if (previousUpdateClearTimeoutRef.current !== null) {
                 window.clearTimeout(previousUpdateClearTimeoutRef.current);
             }
+
+            if (panelCloseTimeoutRef.current !== null) {
+                window.clearTimeout(panelCloseTimeoutRef.current);
+            }
         };
     }, []);
 
@@ -892,6 +951,35 @@ export default function ParkingMap() {
             setSelectedAction(null);
         }
     }, [selectedAction, isUserParkedToday]);
+
+    const handleRecenterToUser = useCallback(async (): Promise<void> => {
+        if (!mapRef.current || isRecenteringMap) {
+            return;
+        }
+
+        setIsRecenteringMap(true);
+
+        try {
+            const targetLocation = currentLocation ?? (await getCurrentPosition());
+            const map = mapRef.current;
+
+            if (!map) {
+                return;
+            }
+
+            map.flyTo({
+                center: [targetLocation.longitude, targetLocation.latitude],
+                zoom: Math.max(map.getZoom(), 16.4),
+                speed: 0.9,
+                curve: 1.2,
+                essential: true,
+            });
+        } catch {
+            console.warn("Unable to center map on current location.");
+        } finally {
+            setIsRecenteringMap(false);
+        }
+    }, [currentLocation, isRecenteringMap]);
 
     const handleSignOut = async (): Promise<void> => {
         setAuthFeedback("");
@@ -1490,6 +1578,7 @@ export default function ParkingMap() {
     useEffect(() => {
         setPanelSwipeOffsetY(0);
         setIsPanelDragging(false);
+        setIsPanelClosing(false);
         panelTouchStartYRef.current = null;
     }, [selectedAction]);
 
@@ -1513,6 +1602,10 @@ export default function ParkingMap() {
     }, [selectedAction]);
 
     const handlePanelTouchStart = (event: TouchEvent<HTMLDivElement>): void => {
+        if (isPanelClosing) {
+            return;
+        }
+
         const touchPoint = event.touches[0];
 
         if (!touchPoint) {
@@ -1524,7 +1617,7 @@ export default function ParkingMap() {
     };
 
     const handlePanelTouchMove = (event: TouchEvent<HTMLDivElement>): void => {
-        if (panelTouchStartYRef.current === null) {
+        if (panelTouchStartYRef.current === null || isPanelClosing) {
             return;
         }
 
@@ -1540,12 +1633,40 @@ export default function ParkingMap() {
         setPanelSwipeOffsetY(swipeDistance);
     };
 
+    const closeActionPanelWithSwipeOut = useCallback((): void => {
+        if (isPanelClosing) {
+            return;
+        }
+
+        const viewportHeight = Math.max(window.visualViewport?.height ?? 0, window.innerHeight ?? 0, 420);
+
+        setIsPanelClosing(true);
+        setPanelSwipeOffsetY(viewportHeight);
+        panelTouchStartYRef.current = null;
+
+        if (panelCloseTimeoutRef.current !== null) {
+            window.clearTimeout(panelCloseTimeoutRef.current);
+        }
+
+        panelCloseTimeoutRef.current = window.setTimeout(() => {
+            setSelectedAction(null);
+            setFullnessLevel(null);
+            setPanelSwipeOffsetY(0);
+            setIsPanelClosing(false);
+            panelCloseTimeoutRef.current = null;
+        }, 300);
+    }, [isPanelClosing]);
+
     const handlePanelTouchEnd = (): void => {
         setIsPanelDragging(false);
 
+        if (isPanelClosing) {
+            return;
+        }
+
         if (panelSwipeOffsetY >= PANEL_SWIPE_CLOSE_THRESHOLD_PX) {
-            setSelectedAction(null);
-            setFullnessLevel(null);
+            closeActionPanelWithSwipeOut();
+            return;
         }
 
         setPanelSwipeOffsetY(0);
@@ -1850,9 +1971,9 @@ export default function ParkingMap() {
 
             {/* Top bar: minimal info */}
             <div
-                className="absolute top-0 left-0 right-0 z-10 px-4 py-3 sm:py-4 flex items-center justify-between"
+                className="absolute top-0 left-0 right-0 z-10 flex items-center justify-between px-4 py-3 sm:py-4"
                 style={{
-                    backgroundColor: "rgba(0,0,0,0.3)",
+                    backgroundColor: "rgba(0, 0, 0, 0.26)",
                     backdropFilter: "blur(8px)",
                     paddingTop: "calc(0.75rem + max(0px, env(safe-area-inset-top)))",
                 }}
@@ -1917,11 +2038,13 @@ export default function ParkingMap() {
 
                         {session ? (
                             <button
+                                type="button"
                                 onClick={() => setShowDashboard(true)}
-                                className="px-3 py-1.5 rounded-full text-xs font-semibold text-white transition"
-                                style={{ backgroundColor: "rgba(59, 130, 246, 0.4)" }}
+                                className="rounded-full p-1.5 text-white transition hover:text-white/90"
+                                style={{ backgroundColor: "transparent" }}
+                                aria-label="Open profile"
                             >
-                                👤
+                                <ProfileOutlineIcon />
                             </button>
                         ) : (
                             <div className="text-xs text-gray-300">Sign in to report</div>
@@ -1996,6 +2119,15 @@ export default function ParkingMap() {
                         </div>
                     ) : null}
                 </div>
+
+                <div
+                    className="pointer-events-none absolute inset-x-0 -bottom-4 h-4"
+                    style={{
+                        background:
+                            "linear-gradient(to bottom, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.08) 42%, rgba(255, 255, 255, 0))",
+                        opacity: 0.34,
+                    }}
+                />
             </div>
 
             {/* Bottom sheet: report form (only show when action selected) */}
@@ -2005,7 +2137,11 @@ export default function ParkingMap() {
                     style={{
                         animation: "slideUp 0.3s ease-out",
                         transform: `translateY(${panelSwipeOffsetY}px)`,
-                        transition: isPanelDragging ? "none" : "transform 0.18s ease",
+                        transition: isPanelDragging
+                            ? "none"
+                            : isPanelClosing
+                              ? "transform 0.32s cubic-bezier(0.2, 0.8, 0.2, 1)"
+                              : "transform 0.18s ease-out",
                         touchAction: "none",
                         overscrollBehaviorY: "contain",
                     }}
@@ -2106,36 +2242,62 @@ export default function ParkingMap() {
                 <div className="fixed bottom-6 sm:bottom-6 right-4 sm:right-6 z-10 flex flex-col gap-3 sm:gap-3">
                     {!selectedAction && (
                         <>
-                            {(Object.keys(REPORT_ACTION_CONFIG) as ReportActionType[]).map((actionType) => {
-                                const isDisabled = isActionDisabledForParkState(actionType, isUserParkedToday);
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    void handleRecenterToUser();
+                                }}
+                                disabled={isRecenteringMap}
+                                className="group relative flex h-14 w-14 self-end items-center justify-center rounded-full border text-white backdrop-blur-md transition duration-300 hover:-translate-y-0.5 disabled:opacity-60"
+                                style={{
+                                    background: "radial-gradient(circle at 30% 30%, rgba(255,255,255,0.25), rgba(15,23,42,0.66))",
+                                    borderColor: "rgba(255, 255, 255, 0.7)",
+                                    boxShadow: "0 16px 30px rgba(15, 23, 42, 0.45)",
+                                    animation: "jac-action-button-in 0.42s cubic-bezier(0.22, 1, 0.36, 1) 120ms both",
+                                }}
+                                title="Center map on my location"
+                                aria-label="Center map on my location"
+                            >
+                                <RecenterIcon />
+                            </button>
 
-                                let bgColor = "#22c55e"; // default green
-                                if (actionType === "parked")
-                                    bgColor = "#22c55e"; // green for parked
-                                else if (actionType === "leaving")
-                                    bgColor = "#f97316"; // orange for leaving
-                                else if (actionType === "observing") bgColor = "#0ea5e9"; // blue for observing
+                            {ACTION_BUTTON_RENDER_ORDER.map((actionType) => {
+                                const isDisabled = isActionDisabledForParkState(actionType, isUserParkedToday);
+                                const visuals = ACTION_BUTTON_VISUALS[actionType];
+
+                                const disabledBackground =
+                                    "linear-gradient(135deg, rgba(71, 85, 105, 0.8), rgba(51, 65, 85, 0.8))";
 
                                 return (
                                     <button
                                         key={actionType}
+                                        type="button"
                                         onClick={() => !isDisabled && setSelectedAction(actionType)}
                                         disabled={isDisabled}
-                                        className="flex flex-col sm:flex-row items-center justify-center sm:justify-start gap-1.5 sm:gap-2.5 px-4 sm:px-5 py-3.5 sm:py-3 rounded-2xl sm:rounded-full font-semibold text-xs sm:text-sm shadow-xl hover:shadow-2xl transition"
+                                        className="group relative flex min-w-[11.75rem] items-center gap-2.5 overflow-hidden rounded-2xl border px-4 py-3 text-left text-white backdrop-blur-md transition duration-300 hover:-translate-y-0.5"
                                         style={{
-                                            backgroundColor: isDisabled ? "#666" : bgColor,
+                                            background: isDisabled ? disabledBackground : visuals.gradient,
                                             color: "white",
-                                            opacity: isDisabled ? 0.4 : 1,
+                                            opacity: isDisabled ? 0.56 : 1,
                                             cursor: isDisabled ? "not-allowed" : "pointer",
-                                            border: "2px solid white",
-                                            boxShadow: "0 4px 12px rgba(0,0,0,0.4)",
+                                            borderColor: isDisabled ? "rgba(148, 163, 184, 0.3)" : visuals.borderColor,
+                                            boxShadow: isDisabled ? "0 12px 24px rgba(15,23,42,0.28)" : visuals.glow,
+                                            animation: `jac-action-button-in 0.42s cubic-bezier(0.22, 1, 0.36, 1) ${ACTION_BUTTON_ENTRANCE_DELAY_MS[actionType]}ms both`,
                                         }}
                                         title={REPORT_ACTION_CONFIG[actionType].label}
                                     >
-                                        <span className="text-2xl sm:text-2xl flex-shrink-0">
+                                        <span className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.28),transparent_62%)] opacity-75" />
+
+                                        <span
+                                            className="relative flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full border border-white/30"
+                                            style={{
+                                                backgroundColor: isDisabled ? "rgba(148, 163, 184, 0.25)" : visuals.iconSurface,
+                                            }}
+                                        >
                                             <ActionIcon actionType={actionType} />
                                         </span>
-                                        <span className="text-xs sm:text-sm font-bold leading-tight">
+
+                                        <span className="relative text-xs font-bold leading-tight sm:text-sm">
                                             {REPORT_ACTION_CONFIG[actionType].label}
                                         </span>
                                     </button>
@@ -2185,9 +2347,8 @@ export default function ParkingMap() {
                             </div>
                         </div>
 
-                        <div className="mt-2 flex items-center justify-between text-[11px]" style={{ color: "var(--muted)" }}>
-                            <span>Swipe left, right, or up to dismiss</span>
-                            <span>🔥 {heatmapData.features.length} hotspots</span>
+                        <div className="mt-2 text-[11px]" style={{ color: "var(--muted)" }}>
+                            Swipe left, right, or up to dismiss
                         </div>
                     </div>
                 </div>
@@ -2228,6 +2389,21 @@ export default function ParkingMap() {
                     }
                     100% {
                         box-shadow: 0 0 0 0 rgba(37, 99, 235, 0);
+                    }
+                }
+
+                @keyframes jac-action-button-in {
+                    0% {
+                        opacity: 0;
+                        transform: translateY(24px) scale(0.94);
+                    }
+                    70% {
+                        opacity: 1;
+                        transform: translateY(-2px) scale(1.01);
+                    }
+                    100% {
+                        opacity: 1;
+                        transform: translateY(0) scale(1);
                     }
                 }
 
