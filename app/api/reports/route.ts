@@ -43,6 +43,7 @@ type ViewerParkingState = {
 
 const REPORT_COLUMNS =
     "id, lot_name, availability, action_type, fullness_level, note, distance_to_campus_meters, created_at, user_id, reporter_latitude, reporter_longitude";
+const REPORTS_RESET_KEY_HEADER = "x-jacpark-reset-key";
 
 const allowedActionTypes: ReadonlySet<ReportActionType> = new Set(["parked", "leaving", "observing"]);
 const OBSERVING_COOLDOWN_MS = 60 * 60 * 1000;
@@ -123,6 +124,17 @@ const toApiReport = (row: ParkingReportRow): ApiReport => {
         reporterLatitude: row.reporter_latitude,
         reporterLongitude: row.reporter_longitude,
     };
+};
+
+const canResetReports = (request: Request): boolean => {
+    const configuredResetKey = process.env.REPORTS_RESET_KEY?.trim();
+
+    if (configuredResetKey) {
+        const providedResetKey = request.headers.get(REPORTS_RESET_KEY_HEADER)?.trim();
+        return providedResetKey === configuredResetKey;
+    }
+
+    return process.env.NODE_ENV !== "production";
 };
 
 export async function GET(request: Request) {
@@ -399,6 +411,35 @@ export async function POST(request: Request) {
         const report = toApiReport(data as ParkingReportRow);
 
         return NextResponse.json({ report }, { status: 201 });
+    } catch {
+        return NextResponse.json({ error: "Server configuration error." }, { status: 500 });
+    }
+}
+
+export async function DELETE(request: Request) {
+    if (!canResetReports(request)) {
+        return NextResponse.json(
+            {
+                error: "Report reset is disabled. Use a non-production environment or configure REPORTS_RESET_KEY.",
+            },
+            { status: 403 },
+        );
+    }
+
+    try {
+        const supabase = getSupabaseServerClient();
+
+        const { data, error } = await supabase
+            .from("parking_reports")
+            .delete()
+            .gte("created_at", "1970-01-01T00:00:00.000Z")
+            .select("id");
+
+        if (error) {
+            return NextResponse.json({ error: "Failed to clear reports." }, { status: 500 });
+        }
+
+        return NextResponse.json({ deletedCount: data?.length ?? 0 });
     } catch {
         return NextResponse.json({ error: "Server configuration error." }, { status: 500 });
     }

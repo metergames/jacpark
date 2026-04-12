@@ -62,8 +62,7 @@ const REPORTS_HEATMAP_SOURCE_ID = "parking-reports-heatmap";
 const REPORTS_HEATMAP_LAYER_ID = "parking-reports-heatmap-layer";
 const REPORTS_HEATMAP_POINTS_LAYER_ID = "parking-reports-points-layer";
 const HEATMAP_REPORTS_LIMIT = 120;
-const HEATMAP_MIN_PRIVACY_CELL_METERS = 36;
-const HEATMAP_MAX_PRIVACY_CELL_METERS = 140;
+const HEATMAP_PRIVACY_CELL_METERS = 68;
 const HEATMAP_MERGE_DISTANCE_MULTIPLIER = 1.9;
 const HEATMAP_MAX_REPORT_AGE_MS = 3 * 60 * 60 * 1000;
 const HEATMAP_BASE_HALFLIFE_MS = 50 * 60 * 1000;
@@ -80,6 +79,8 @@ const PANEL_SWIPE_CLOSE_THRESHOLD_PX = 100;
 const USER_LOCATION_MARKER_CLASS_NAME = "jac-user-location-marker";
 const SUBMIT_RETRY_BASE_DELAY_MS = 400;
 const SUBMIT_RETRY_MAX_ATTEMPTS = 3;
+const DEV_REPORTS_RESET_ENABLED = process.env.NODE_ENV !== "production";
+const REPORTS_RESET_KEY_HEADER = "x-jacpark-reset-key";
 
 const TRANSIENT_SUBMIT_STATUSES: ReadonlySet<number> = new Set([408, 425, 429, 500, 502, 503, 504]);
 
@@ -398,18 +399,7 @@ const getActionSignal = (report: ParkingReport): number => {
     return clampNumber(fullnessSignal, -1, 1);
 };
 
-const getZoomScaledPrivacyCellMeters = (zoom: number): number => {
-    if (zoom <= 12) {
-        return HEATMAP_MAX_PRIVACY_CELL_METERS;
-    }
-
-    if (zoom >= 19) {
-        return HEATMAP_MIN_PRIVACY_CELL_METERS;
-    }
-
-    const t = (zoom - 12) / (19 - 12);
-    return HEATMAP_MAX_PRIVACY_CELL_METERS - t * (HEATMAP_MAX_PRIVACY_CELL_METERS - HEATMAP_MIN_PRIVACY_CELL_METERS);
-};
+const getPrivacyCellMeters = (): number => HEATMAP_PRIVACY_CELL_METERS;
 
 const formatAvailabilityLabel = (availability: ParkingAvailability): string => {
     if (availability === "open") {
@@ -518,7 +508,8 @@ export default function ParkingMap() {
     const [panelSwipeOffsetY, setPanelSwipeOffsetY] = useState<number>(0);
     const [isPanelDragging, setIsPanelDragging] = useState<boolean>(false);
     const [isMapReady, setIsMapReady] = useState<boolean>(false);
-    const [mapZoom, setMapZoom] = useState<number>(JOHN_ABBOTT_ZOOM);
+    const [isResettingReports, setIsResettingReports] = useState<boolean>(false);
+    const [resetReportsFeedback, setResetReportsFeedback] = useState<string>("");
 
     const { isNearCampus, distanceToCampus, locationError, currentLocation } = useCampusProximity();
 
@@ -545,7 +536,7 @@ export default function ParkingMap() {
     // Complex hotspot model: privacy-safe gridding, time decay, conflict scoring, and spatial merge.
     const heatmapData = useMemo(() => {
         const nowMs = Date.now();
-        const privacyCellMeters = getZoomScaledPrivacyCellMeters(mapZoom);
+        const privacyCellMeters = getPrivacyCellMeters();
         const mergeDistanceMeters = privacyCellMeters * HEATMAP_MERGE_DISTANCE_MULTIPLIER;
 
         const preparedReports = reports
@@ -827,7 +818,7 @@ export default function ParkingMap() {
                 },
             })),
         };
-    }, [reports, mapZoom]);
+    }, [reports]);
 
     useEffect(() => {
         return () => {
@@ -929,6 +920,59 @@ export default function ParkingMap() {
             unsubscribe?.();
         };
     }, []);
+
+    const handleResetReportsForTesting = async (): Promise<void> => {
+        if (!DEV_REPORTS_RESET_ENABLED || isResettingReports) {
+            return;
+        }
+
+        const shouldReset = window.confirm("Delete all parking reports? This is for development testing only.");
+
+        if (!shouldReset) {
+            return;
+        }
+
+        setIsResettingReports(true);
+        setResetReportsFeedback("");
+
+        try {
+            const headers: Record<string, string> = {};
+            const resetKey = process.env.NEXT_PUBLIC_REPORTS_RESET_KEY?.trim();
+
+            if (resetKey) {
+                headers[REPORTS_RESET_KEY_HEADER] = resetKey;
+            }
+
+            const response = await fetch("/api/reports", {
+                method: "DELETE",
+                cache: "no-store",
+                headers,
+            });
+
+            const payload = (await response.json().catch(() => ({}))) as { deletedCount?: number; error?: string };
+
+            if (!response.ok) {
+                setResetReportsFeedback(payload.error ?? "Unable to clear reports.");
+                return;
+            }
+
+            setReports([]);
+            setLatestReport(null);
+            setPreviousReport(null);
+            setDismissedLatestReportId(null);
+            setIsUserParkedToday(false);
+            setSelectedAction(null);
+            setFullnessLevel(null);
+            setReportFeedback("");
+            setReportsLoadError("");
+
+            setResetReportsFeedback(`Cleared ${payload.deletedCount ?? 0} reports.`);
+        } catch {
+            setResetReportsFeedback("Unable to clear reports.");
+        } finally {
+            setIsResettingReports(false);
+        }
+    };
 
     const handleReportSubmit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
         event.preventDefault();
@@ -1403,23 +1447,16 @@ export default function ParkingMap() {
 
         const handleMapLoad = (): void => {
             setIsMapReady(true);
-            setMapZoom(map.getZoom());
             void addBoundaryLayers();
         };
 
-        const handleZoomEnd = (): void => {
-            setMapZoom(map.getZoom());
-        };
-
         map.on("load", handleMapLoad);
-        map.on("zoomend", handleZoomEnd);
 
         return () => {
             isActive = false;
             userLocationMarkerRef.current?.remove();
             userLocationMarkerRef.current = null;
             map.off("load", handleMapLoad);
-            map.off("zoomend", handleZoomEnd);
             map.remove();
             mapRef.current = null;
         };
@@ -1505,55 +1542,48 @@ export default function ParkingMap() {
             existingSource.setData(data);
         }
 
+        const boundaryFillLayerExists = Boolean(map.getLayer(BOUNDARY_FILL_LAYER_ID));
+
         // Add heatmap layer if it doesn't exist
         if (!map.getLayer(REPORTS_HEATMAP_LAYER_ID)) {
-            map.addLayer(
-                {
-                    id: REPORTS_HEATMAP_LAYER_ID,
-                    type: "heatmap",
-                    source: REPORTS_HEATMAP_SOURCE_ID,
-                    paint: {
-                        "heatmap-weight": [
-                            "*",
-                            ["coalesce", ["get", "weight"], 0],
-                            ["interpolate", ["linear"], ["coalesce", ["get", "confidence"], 0.4], 0, 0.25, 1, 1],
-                        ],
-                        "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 9, 1, 12, 1.35, 15, 1.75, 18, 2.2],
-                        "heatmap-color": [
-                            "interpolate",
-                            ["linear"],
-                            ["heatmap-density"],
-                            0,
-                            "rgba(81, 187, 214, 0)",
-                            0.15,
-                            "#51bbd6",
-                            0.35,
-                            "#f1f075",
-                            0.6,
-                            "#f28b36",
-                            1,
-                            "#b41135",
-                        ],
-                        "heatmap-radius": [
-                            "interpolate",
-                            ["exponential", 1.6],
-                            ["zoom"],
-                            9,
-                            14,
-                            12,
-                            30,
-                            15,
-                            68,
-                            18,
-                            132,
-                            20,
-                            190,
-                        ],
-                        "heatmap-opacity": ["interpolate", ["linear"], ["zoom"], 9, 0.76, 13, 0.88, 17, 0.95, 20, 0.84],
-                    },
+            const heatmapLayer: mapboxgl.HeatmapLayer = {
+                id: REPORTS_HEATMAP_LAYER_ID,
+                type: "heatmap",
+                source: REPORTS_HEATMAP_SOURCE_ID,
+                paint: {
+                    "heatmap-weight": [
+                        "*",
+                        ["coalesce", ["get", "weight"], 0],
+                        ["interpolate", ["linear"], ["coalesce", ["get", "confidence"], 0.4], 0, 0.25, 1, 1],
+                    ],
+                    "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 9, 1, 12, 1.35, 15, 1.75, 18, 2.2],
+                    "heatmap-color": [
+                        "interpolate",
+                        ["linear"],
+                        ["heatmap-density"],
+                        0,
+                        "rgba(81, 187, 214, 0)",
+                        0.15,
+                        "#51bbd6",
+                        0.35,
+                        "#f1f075",
+                        0.6,
+                        "#f28b36",
+                        1,
+                        "#b41135",
+                    ],
+                    "heatmap-radius": ["interpolate", ["exponential", 1.6], ["zoom"], 9, 14, 12, 30, 15, 68, 18, 132, 20, 190],
+                    "heatmap-opacity": ["interpolate", ["linear"], ["zoom"], 9, 0.76, 13, 0.88, 17, 0.95, 20, 0.84],
                 },
-                BOUNDARY_FILL_LAYER_ID, // Insert before boundary layer
-            );
+            };
+
+            if (boundaryFillLayerExists) {
+                map.addLayer(heatmapLayer, BOUNDARY_FILL_LAYER_ID);
+            } else {
+                map.addLayer(heatmapLayer);
+            }
+        } else if (boundaryFillLayerExists) {
+            map.moveLayer(REPORTS_HEATMAP_LAYER_ID, BOUNDARY_FILL_LAYER_ID);
         }
 
         // Remove explicit point rendering to avoid exposing precise reported positions.
@@ -1584,9 +1614,23 @@ export default function ParkingMap() {
                         </>
                     )}
                 </div>
-                <div className="flex items-center gap-2">
-                    {session ? (
-                        <>
+                <div className="flex flex-col items-end gap-1">
+                    <div className="flex items-center gap-2">
+                        {DEV_REPORTS_RESET_ENABLED ? (
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    void handleResetReportsForTesting();
+                                }}
+                                disabled={isResettingReports}
+                                className="rounded-full px-3 py-1.5 text-[11px] font-semibold text-white transition disabled:opacity-60"
+                                style={{ backgroundColor: "rgba(244, 63, 94, 0.55)" }}
+                            >
+                                {isResettingReports ? "Clearing..." : "Clear reports"}
+                            </button>
+                        ) : null}
+
+                        {session ? (
                             <button
                                 onClick={() => setShowDashboard(true)}
                                 className="px-3 py-1.5 rounded-full text-xs font-semibold text-white transition"
@@ -1594,10 +1638,14 @@ export default function ParkingMap() {
                             >
                                 👤
                             </button>
-                        </>
-                    ) : (
-                        <div className="text-xs text-gray-300">Sign in to report</div>
-                    )}
+                        ) : (
+                            <div className="text-xs text-gray-300">Sign in to report</div>
+                        )}
+                    </div>
+
+                    {resetReportsFeedback ? (
+                        <p className="max-w-[180px] text-right text-[11px] font-medium text-white/90">{resetReportsFeedback}</p>
+                    ) : null}
                 </div>
             </div>
 
