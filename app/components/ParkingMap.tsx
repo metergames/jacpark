@@ -2605,45 +2605,6 @@ export default function ParkingMap() {
                 <div className="fixed bottom-6 sm:bottom-6 right-4 sm:right-6 z-10 flex flex-col gap-3 sm:gap-3">
                     {!selectedAction && (
                         <>
-                            {isPremiumActive ? (
-                                <button
-                                    type="button"
-                                    onClick={handleFindMyCar}
-                                    disabled={!parkedCarLocation || isFindingParkedCar}
-                                    className="group relative flex min-w-[11.75rem] items-center gap-2.5 overflow-hidden rounded-2xl border px-4 py-3 text-left text-white backdrop-blur-md transition duration-300 hover:-translate-y-0.5 disabled:opacity-55"
-                                    style={{
-                                        background: "linear-gradient(135deg, rgba(91, 33, 182, 0.9), rgba(126, 34, 206, 0.9))",
-                                        borderColor: "rgba(216, 180, 254, 0.62)",
-                                        boxShadow: "0 16px 32px rgba(91, 33, 182, 0.38)",
-                                        cursor: !parkedCarLocation || isFindingParkedCar ? "not-allowed" : "pointer",
-                                        animation: "jac-action-button-in 0.42s cubic-bezier(0.22, 1, 0.36, 1) 40ms both",
-                                    }}
-                                    title={
-                                        parkedCarLocation ? "Center map on saved parked car" : "Park first to save car location"
-                                    }
-                                >
-                                    <span className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.28),transparent_62%)] opacity-75" />
-                                    <span className="relative flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full border border-white/30 bg-white/20">
-                                        <svg
-                                            viewBox="0 0 24 24"
-                                            className="h-5 w-5"
-                                            fill="none"
-                                            stroke="currentColor"
-                                            strokeWidth="2"
-                                        >
-                                            <path d="M6 16h12" />
-                                            <path d="M7 16l1.5-5h7L17 16" />
-                                            <circle cx="8" cy="18" r="1.5" />
-                                            <circle cx="16" cy="18" r="1.5" />
-                                            <path d="M12 4v3" />
-                                        </svg>
-                                    </span>
-                                    <span className="relative text-xs font-bold leading-tight sm:text-sm">
-                                        {parkedCarLocation ? "Find my car" : "Park to enable Find my car"}
-                                    </span>
-                                </button>
-                            ) : null}
-
                             <button
                                 type="button"
                                 onClick={() => {
@@ -2705,6 +2666,45 @@ export default function ParkingMap() {
                                     </button>
                                 );
                             })}
+
+                            {isPremiumActive ? (
+                                <button
+                                    type="button"
+                                    onClick={handleFindMyCar}
+                                    disabled={!parkedCarLocation || isFindingParkedCar}
+                                    className="group relative flex min-w-[11.75rem] items-center gap-2.5 overflow-hidden rounded-2xl border px-4 py-3 text-left text-white backdrop-blur-md transition duration-300 hover:-translate-y-0.5 disabled:opacity-55"
+                                    style={{
+                                        background: "linear-gradient(135deg, rgba(91, 33, 182, 0.9), rgba(126, 34, 206, 0.9))",
+                                        borderColor: "rgba(216, 180, 254, 0.62)",
+                                        boxShadow: "0 16px 32px rgba(91, 33, 182, 0.38)",
+                                        cursor: !parkedCarLocation || isFindingParkedCar ? "not-allowed" : "pointer",
+                                        animation: "jac-action-button-in 0.42s cubic-bezier(0.22, 1, 0.36, 1) 240ms both",
+                                    }}
+                                    title={
+                                        parkedCarLocation ? "Center map on saved parked car" : "Park first to save car location"
+                                    }
+                                >
+                                    <span className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.28),transparent_62%)] opacity-75" />
+                                    <span className="relative flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full border border-white/30 bg-white/20">
+                                        <svg
+                                            viewBox="0 0 24 24"
+                                            className="h-5 w-5"
+                                            fill="none"
+                                            stroke="currentColor"
+                                            strokeWidth="2"
+                                        >
+                                            <path d="M6 16h12" />
+                                            <path d="M7 16l1.5-5h7L17 16" />
+                                            <circle cx="8" cy="18" r="1.5" />
+                                            <circle cx="16" cy="18" r="1.5" />
+                                            <path d="M12 4v3" />
+                                        </svg>
+                                    </span>
+                                    <span className="relative text-xs font-bold leading-tight sm:text-sm">
+                                        {parkedCarLocation ? "Find my car" : "Park to enable Find my car"}
+                                    </span>
+                                </button>
+                            ) : null}
                         </>
                     )}
                 </div>
@@ -2712,7 +2712,7 @@ export default function ParkingMap() {
 
             {/* Latest update card - top, swipe left/right/up to dismiss */}
             {isAuthReady && visibleLatestReport ? (
-                <div className="absolute left-0 right-0 top-16 z-20 px-3 sm:top-20 sm:px-4">
+                <div className="absolute left-0 right-0 top-20 z-20 px-3 sm:top-24 sm:px-4">
                     <div
                         className="mx-auto w-full max-w-sm rounded-2xl border p-3 shadow-lg sm:p-4"
                         style={{
