@@ -19,7 +19,7 @@ export default function MapPage() {
         const checkAuth = async () => {
             try {
                 const supabase = getSupabaseBrowserClient();
-                
+
                 // First try to get the stored session from localStorage
                 const { data } = await supabase.auth.getSession();
 
@@ -28,14 +28,14 @@ export default function MapPage() {
                         setSession(data.session);
                         setIsLoading(false);
                     } else {
-                        // Not authenticated, redirect to home
-                        router.push("/");
+                        // Not authenticated, redirect to login
+                        router.push("/login");
                     }
                 }
             } catch (error) {
                 console.error("Auth check failed:", error);
                 if (isMounted) {
-                    router.push("/");
+                    router.push("/login");
                 }
             }
         };
@@ -53,7 +53,7 @@ export default function MapPage() {
                 } else if (event === "SIGNED_OUT") {
                     // User signed out
                     setSession(null);
-                    router.push("/");
+                    router.push("/login");
                 }
             }
         });

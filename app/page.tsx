@@ -11,10 +11,12 @@ export default function Home() {
     useEffect(() => {
         const standaloneMode =
             window.matchMedia("(display-mode: standalone)").matches ||
-            (typeof navigator !== "undefined" && "standalone" in navigator && Boolean((navigator as Navigator & { standalone?: boolean }).standalone));
+            (typeof navigator !== "undefined" &&
+                "standalone" in navigator &&
+                Boolean((navigator as Navigator & { standalone?: boolean }).standalone));
 
         if (standaloneMode) {
-            router.replace("/login");
+            router.replace("/map");
         }
 
         setIsStandalone(standaloneMode);

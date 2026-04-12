@@ -40,7 +40,7 @@ export default function UserDashboard({
     const [userRank, setUserRank] = useState<number | null>(null);
     const [userReports, setUserReports] = useState<number>(0);
     const [premiumExpiresAt, setPremiumExpiresAt] = useState<string | null>(null);
-    const [premiumMonthCostPoints, setPremiumMonthCostPoints] = useState<number>(120);
+    const [premiumMonthCostPoints, setPremiumMonthCostPoints] = useState<number>(60);
     const [hasSavedCar, setHasSavedCar] = useState<boolean>(false);
     const [premiumFeedback, setPremiumFeedback] = useState<string>("");
     const [isBuyingPremium, setIsBuyingPremium] = useState<boolean>(false);
@@ -107,9 +107,7 @@ export default function UserDashboard({
             points: Number.isFinite(payload.points) ? Number(payload.points) : 0,
             premiumExpiresAt: typeof payload.premiumExpiresAt === "string" ? payload.premiumExpiresAt : null,
             isPremium: Boolean(payload.isPremium),
-            premiumMonthCostPoints: Number.isFinite(payload.premiumMonthCostPoints)
-                ? Number(payload.premiumMonthCostPoints)
-                : 120,
+            premiumMonthCostPoints: Number.isFinite(payload.premiumMonthCostPoints) ? Number(payload.premiumMonthCostPoints) : 60,
             parkedCarLocation:
                 payload.parkedCarLocation &&
                 typeof payload.parkedCarLocation.latitude === "number" &&

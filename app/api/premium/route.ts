@@ -4,7 +4,7 @@ import { getSupabaseServerClient } from "../../lib/supabaseServer";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const DEFAULT_PREMIUM_MONTH_COST_POINTS = 120;
+const DEFAULT_PREMIUM_MONTH_COST_POINTS = 60;
 
 type ProfileRow = {
     points: number;
