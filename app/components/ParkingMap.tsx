@@ -52,7 +52,7 @@ type ReportResponse = {
 type BoundaryFeatureCollection = FeatureCollection<Polygon | MultiPolygon>;
 
 const JOHN_ABBOTT_CENTER: LngLatTuple = [-73.94212693281301, 45.408822013619336];
-const JOHN_ABBOTT_ZOOM = 18;
+const JOHN_ABBOTT_ZOOM = 15;
 const LIGHT_STYLE_URL = "mapbox://styles/mapbox/standard";
 const BOUNDARY_SOURCE_ID = "parking-boundary-source";
 const BOUNDARY_FILL_LAYER_ID = "parking-boundary-fill";
@@ -61,11 +61,14 @@ const BOUNDARY_GEOJSON_PATH = "/boundaries/jac-parking-boundaries.geojson";
 const REPORTS_HEATMAP_SOURCE_ID = "parking-reports-heatmap";
 const REPORTS_HEATMAP_LAYER_ID = "parking-reports-heatmap-layer";
 const REPORTS_HEATMAP_POINTS_LAYER_ID = "parking-reports-points-layer";
-const LATEST_UPDATE_LIMIT = 1;
+const HEATMAP_REPORTS_LIMIT = 50;
+const HEATMAP_GROUP_CELL_METERS = 24;
 const FAST_REPORTS_REFRESH_INTERVAL_MS = 10000;
 const SLOW_REPORTS_REFRESH_INTERVAL_MS = 90000;
 const FAST_REFRESH_DISTANCE_METERS = 2000;
 const SWIPE_DISMISS_THRESHOLD_PX = 90;
+const SWIPE_UP_DISMISS_THRESHOLD_PX = 70;
+const PANEL_SWIPE_CLOSE_THRESHOLD_PX = 100;
 const USER_LOCATION_MARKER_CLASS_NAME = "jac-user-location-marker";
 const SUBMIT_RETRY_BASE_DELAY_MS = 400;
 const SUBMIT_RETRY_MAX_ATTEMPTS = 3;
@@ -115,25 +118,33 @@ const ACTION_CARD_STYLES: Record<ReportActionType, { selected: string; idle: str
 
 const FULLNESS_BUTTON_STYLES: Record<number, { selected: string; idle: string }> = {
     1: {
-        selected: "border-emerald-500 bg-emerald-50 text-emerald-900",
+        selected: "border-emerald-500 bg-emerald-50 text-emerald-900 dark:bg-emerald-950/45 dark:text-emerald-100",
         idle: "border-[var(--line)] bg-[var(--surface)] text-[var(--foreground)] hover:border-emerald-400",
     },
     2: {
-        selected: "border-lime-500 bg-lime-50 text-lime-900",
+        selected: "border-lime-500 bg-lime-50 text-lime-900 dark:bg-lime-950/45 dark:text-lime-100",
         idle: "border-[var(--line)] bg-[var(--surface)] text-[var(--foreground)] hover:border-lime-400",
     },
     3: {
-        selected: "border-amber-500 bg-amber-50 text-amber-900",
+        selected: "border-amber-500 bg-amber-50 text-amber-900 dark:bg-amber-950/45 dark:text-amber-100",
         idle: "border-[var(--line)] bg-[var(--surface)] text-[var(--foreground)] hover:border-amber-400",
     },
     4: {
-        selected: "border-orange-500 bg-orange-50 text-orange-900",
+        selected: "border-orange-500 bg-orange-50 text-orange-900 dark:bg-orange-950/45 dark:text-orange-100",
         idle: "border-[var(--line)] bg-[var(--surface)] text-[var(--foreground)] hover:border-orange-400",
     },
     5: {
-        selected: "border-rose-500 bg-rose-50 text-rose-900",
+        selected: "border-rose-500 bg-rose-50 text-rose-900 dark:bg-rose-950/45 dark:text-rose-100",
         idle: "border-[var(--line)] bg-[var(--surface)] text-[var(--foreground)] hover:border-rose-400",
     },
+};
+
+const FULLNESS_ICON_SELECTED_COLORS: Record<number, string> = {
+    1: "#10b981",
+    2: "#84cc16",
+    3: "#f59e0b",
+    4: "#f97316",
+    5: "#f43f5e",
 };
 
 const ActionIcon = ({ actionType }: { actionType: ReportActionType }) => {
@@ -181,8 +192,15 @@ const FullnessIcon = ({ level, selected }: { level: number; selected: boolean })
                     width={3.6}
                     height={height}
                     rx={1}
-                    fill={filled ? (selected ? "currentColor" : "#334155") : "#cbd5e1"}
-                    opacity={filled ? 1 : 0.75}
+                    fill={
+                        filled
+                            ? selected
+                                ? FULLNESS_ICON_SELECTED_COLORS[level]
+                                : "rgba(51, 65, 85, 0.95)"
+                            : selected
+                              ? "rgba(148, 163, 184, 0.36)"
+                              : "rgba(148, 163, 184, 0.58)"
+                    }
                 />
             );
         })}
@@ -412,7 +430,8 @@ export default function ParkingMap() {
     const mapRef = useRef<mapboxgl.Map | null>(null);
     const userLocationMarkerRef = useRef<mapboxgl.Marker | null>(null);
     const mapLightPresetRef = useRef<"day" | "night">("day");
-    const latestCardTouchStartXRef = useRef<number | null>(null);
+    const latestCardTouchStartRef = useRef<{ x: number; y: number } | null>(null);
+    const panelTouchStartYRef = useRef<number | null>(null);
     const boundaryDataRef = useRef<BoundaryFeatureCollection | null>(null);
     const latestTransitionFrameRef = useRef<number | null>(null);
     const previousUpdateClearTimeoutRef = useRef<number | null>(null);
@@ -440,8 +459,11 @@ export default function ParkingMap() {
     const [isPreviousReportFading, setIsPreviousReportFading] = useState<boolean>(false);
     const [isLatestReportEntering, setIsLatestReportEntering] = useState<boolean>(false);
     const [dismissedLatestReportId, setDismissedLatestReportId] = useState<string | null>(null);
-    const [latestCardSwipeOffset, setLatestCardSwipeOffset] = useState<number>(0);
+    const [latestCardSwipeOffsetX, setLatestCardSwipeOffsetX] = useState<number>(0);
+    const [latestCardSwipeOffsetY, setLatestCardSwipeOffsetY] = useState<number>(0);
     const [isLatestCardDragging, setIsLatestCardDragging] = useState<boolean>(false);
+    const [panelSwipeOffsetY, setPanelSwipeOffsetY] = useState<number>(0);
+    const [isPanelDragging, setIsPanelDragging] = useState<boolean>(false);
     const [isMapReady, setIsMapReady] = useState<boolean>(false);
 
     const { isNearCampus, distanceToCampus, locationError, currentLocation } = useCampusProximity();
@@ -466,14 +488,12 @@ export default function ParkingMap() {
         return isActionDisabledForParkState(selectedAction, isUserParkedToday);
     }, [selectedAction, isUserParkedToday]);
 
-    // Memoized heatmap data: Filter reports, compute weights, and create GeoJSON
+    // Memoized heatmap data: decay recent reports and group nearby points into local clusters.
     const heatmapData = useMemo(() => {
         const now = new Date().getTime();
-        const DECAY_HOURS = 2; // Data older than 2 hours loses weight
+        const DECAY_HOURS = 2;
         const DECAY_MS = DECAY_HOURS * 60 * 60 * 1000;
-        const AGGREGATION_RADIUS_METERS = 35;
 
-        // Filter reports: must have coordinates and not be optimistic
         const validReports = reports.filter(
             (r) => !r.id.startsWith("optimistic-") && Number.isFinite(r.reporterLatitude) && Number.isFinite(r.reporterLongitude),
         );
@@ -482,63 +502,59 @@ export default function ParkingMap() {
             return { type: "FeatureCollection" as const, features: [] };
         }
 
-        // Convert to weighted points
-        const points: Array<{
-            longitude: number;
-            latitude: number;
-            weight: number;
-            timestamp: string;
-        }> = validReports.map((report) => {
+        const buckets = new Map<
+            string,
+            {
+                totalWeight: number;
+                weightedLongitude: number;
+                weightedLatitude: number;
+                latestTimestampMs: number;
+            }
+        >();
+
+        for (const report of validReports) {
             const timeSinceReportMs = now - new Date(report.createdAt).getTime();
             const decayFactor = Math.max(0.1, 1 - timeSinceReportMs / DECAY_MS);
-
             const intensityWeight = report.availability === "full" ? 1.0 : report.availability === "limited" ? 0.6 : 0.3;
 
+            const latMeters = report.reporterLatitude * 111320;
+            const lngMeters = report.reporterLongitude * 111320 * Math.cos((report.reporterLatitude * Math.PI) / 180);
+            const cellX = Math.floor(lngMeters / HEATMAP_GROUP_CELL_METERS);
+            const cellY = Math.floor(latMeters / HEATMAP_GROUP_CELL_METERS);
+            const bucketKey = `${cellX}:${cellY}`;
+
+            const bucket = buckets.get(bucketKey);
+
+            if (!bucket) {
+                buckets.set(bucketKey, {
+                    totalWeight: intensityWeight * decayFactor,
+                    weightedLongitude: report.reporterLongitude * intensityWeight * decayFactor,
+                    weightedLatitude: report.reporterLatitude * intensityWeight * decayFactor,
+                    latestTimestampMs: Date.parse(report.createdAt),
+                });
+                continue;
+            }
+
+            bucket.totalWeight += intensityWeight * decayFactor;
+            bucket.weightedLongitude += report.reporterLongitude * intensityWeight * decayFactor;
+            bucket.weightedLatitude += report.reporterLatitude * intensityWeight * decayFactor;
+            bucket.latestTimestampMs = Math.max(bucket.latestTimestampMs, Date.parse(report.createdAt));
+        }
+
+        const clusteredPoints = Array.from(buckets.values()).map((bucket) => {
+            const safeWeight = bucket.totalWeight > 0 ? bucket.totalWeight : 0.1;
+
             return {
-                longitude: report.reporterLongitude,
-                latitude: report.reporterLatitude,
-                weight: intensityWeight * decayFactor,
-                timestamp: report.createdAt,
+                longitude: bucket.weightedLongitude / safeWeight,
+                latitude: bucket.weightedLatitude / safeWeight,
+                weight: Math.min(2.6, safeWeight),
+                timestamp: new Date(bucket.latestTimestampMs).toISOString(),
             };
         });
 
-        // Aggregation: cluster nearby points within radius
-        const aggregated: typeof points = [];
-        const processed = new Set<number>();
-
-        for (let i = 0; i < points.length; i++) {
-            if (processed.has(i)) continue;
-
-            const point = points[i];
-            let totalWeight = point.weight;
-            let count = 1;
-
-            for (let j = i + 1; j < points.length; j++) {
-                if (processed.has(j)) continue;
-
-                const otherPoint = points[j];
-                const latDiff = otherPoint.latitude - point.latitude;
-                const lngDiff = otherPoint.longitude - point.longitude;
-                const distMeters = Math.sqrt(latDiff * latDiff + lngDiff * lngDiff) * 111000; // rough conversion
-
-                if (distMeters <= AGGREGATION_RADIUS_METERS) {
-                    processed.add(j);
-                    totalWeight += otherPoint.weight;
-                    count++;
-                }
-            }
-
-            processed.add(i);
-            aggregated.push({
-                ...point,
-                weight: Math.min(1, totalWeight / count),
-            });
-        }
-
-        // Convert to GeoJSON
         return {
             type: "FeatureCollection" as const,
-            features: aggregated.map((pt) => ({
+            features: clusteredPoints.map((pt) => ({
                 type: "Feature" as const,
                 geometry: {
                     type: "Point" as const,
@@ -715,7 +731,7 @@ export default function ParkingMap() {
 
             setReports((prevReports) => {
                 const nonOptimisticReports = prevReports.filter((report) => !report.id.startsWith("optimistic-"));
-                return [optimisticReport, ...nonOptimisticReports].slice(0, LATEST_UPDATE_LIMIT);
+                return [optimisticReport, ...nonOptimisticReports].slice(0, HEATMAP_REPORTS_LIMIT);
             });
 
             if (actionToSubmit === "parked") {
@@ -742,7 +758,7 @@ export default function ParkingMap() {
             setReports((prevReports) =>
                 [createdReport, ...prevReports.filter((report) => report.id !== optimisticReport.id)].slice(
                     0,
-                    LATEST_UPDATE_LIMIT,
+                    HEATMAP_REPORTS_LIMIT,
                 ),
             );
 
@@ -777,7 +793,7 @@ export default function ParkingMap() {
                 localDayStart.setHours(0, 0, 0, 0);
 
                 const query = new URLSearchParams({
-                    limit: String(LATEST_UPDATE_LIMIT),
+                    limit: String(HEATMAP_REPORTS_LIMIT),
                     since: localDayStart.toISOString(),
                 });
 
@@ -895,9 +911,10 @@ export default function ParkingMap() {
     }, [reports, latestReport]);
 
     useEffect(() => {
-        setLatestCardSwipeOffset(0);
+        setLatestCardSwipeOffsetX(0);
+        setLatestCardSwipeOffsetY(0);
         setIsLatestCardDragging(false);
-        latestCardTouchStartXRef.current = null;
+        latestCardTouchStartRef.current = null;
 
         if (!latestReport) {
             return;
@@ -919,34 +936,99 @@ export default function ParkingMap() {
             return;
         }
 
-        latestCardTouchStartXRef.current = event.touches[0]?.clientX ?? null;
+        const touchPoint = event.touches[0];
+
+        if (!touchPoint) {
+            return;
+        }
+
+        latestCardTouchStartRef.current = {
+            x: touchPoint.clientX,
+            y: touchPoint.clientY,
+        };
+
         setIsLatestCardDragging(true);
     };
 
     const handleLatestReportTouchMove = (event: TouchEvent<HTMLDivElement>): void => {
-        if (latestCardTouchStartXRef.current === null) {
+        if (!latestCardTouchStartRef.current) {
             return;
         }
 
-        const currentX = event.touches[0]?.clientX;
+        const touchPoint = event.touches[0];
 
-        if (typeof currentX !== "number") {
+        if (!touchPoint) {
             return;
         }
 
-        const swipeDistance = currentX - latestCardTouchStartXRef.current;
-        setLatestCardSwipeOffset(Math.max(0, swipeDistance));
+        const swipeDeltaX = touchPoint.clientX - latestCardTouchStartRef.current.x;
+        const swipeDeltaY = touchPoint.clientY - latestCardTouchStartRef.current.y;
+
+        setLatestCardSwipeOffsetX(swipeDeltaX);
+        setLatestCardSwipeOffsetY(Math.min(0, swipeDeltaY));
     };
 
     const handleLatestReportTouchEnd = (): void => {
         setIsLatestCardDragging(false);
 
-        if (latestCardSwipeOffset >= SWIPE_DISMISS_THRESHOLD_PX && visibleLatestReport) {
+        const shouldDismissByHorizontalSwipe = Math.abs(latestCardSwipeOffsetX) >= SWIPE_DISMISS_THRESHOLD_PX;
+        const shouldDismissByUpSwipe = latestCardSwipeOffsetY <= -SWIPE_UP_DISMISS_THRESHOLD_PX;
+
+        if ((shouldDismissByHorizontalSwipe || shouldDismissByUpSwipe) && visibleLatestReport) {
             setDismissedLatestReportId(visibleLatestReport.id);
         }
 
-        setLatestCardSwipeOffset(0);
-        latestCardTouchStartXRef.current = null;
+        setLatestCardSwipeOffsetX(0);
+        setLatestCardSwipeOffsetY(0);
+        latestCardTouchStartRef.current = null;
+    };
+
+    useEffect(() => {
+        setPanelSwipeOffsetY(0);
+        setIsPanelDragging(false);
+        panelTouchStartYRef.current = null;
+    }, [selectedAction]);
+
+    const handlePanelTouchStart = (event: TouchEvent<HTMLDivElement>): void => {
+        const touchPoint = event.touches[0];
+
+        if (!touchPoint) {
+            return;
+        }
+
+        panelTouchStartYRef.current = touchPoint.clientY;
+        setIsPanelDragging(true);
+    };
+
+    const handlePanelTouchMove = (event: TouchEvent<HTMLDivElement>): void => {
+        if (panelTouchStartYRef.current === null) {
+            return;
+        }
+
+        const touchPoint = event.touches[0];
+
+        if (!touchPoint) {
+            return;
+        }
+
+        const swipeDistance = Math.max(0, touchPoint.clientY - panelTouchStartYRef.current);
+        setPanelSwipeOffsetY(swipeDistance);
+
+        if (swipeDistance > 0) {
+            event.preventDefault();
+        }
+    };
+
+    const handlePanelTouchEnd = (): void => {
+        setIsPanelDragging(false);
+
+        if (panelSwipeOffsetY >= PANEL_SWIPE_CLOSE_THRESHOLD_PX) {
+            setSelectedAction(null);
+            setFullnessLevel(null);
+        }
+
+        setPanelSwipeOffsetY(0);
+        panelTouchStartYRef.current = null;
     };
 
     useEffect(() => {
@@ -1207,7 +1289,7 @@ export default function ParkingMap() {
     }, [heatmapData, isMapReady]);
 
     return (
-        <section className="relative h-[100dvh] w-screen overflow-hidden">
+        <section className="relative h-[100dvh] w-screen overflow-hidden" style={{ overscrollBehaviorY: "contain" }}>
             {/* Full-screen map */}
             <div ref={mapContainerRef} className="h-full w-full" />
 
@@ -1217,10 +1299,16 @@ export default function ParkingMap() {
                 style={{ backgroundColor: "rgba(0,0,0,0.3)", backdropFilter: "blur(8px)" }}
             >
                 <div className="flex items-center gap-2">
-                    <div className="text-sm sm:text-base font-semibold text-white">{formatDistance(distanceToCampus)}</div>
-                    <div className={`text-xs sm:text-sm font-medium ${isNearCampus ? "text-green-400" : "text-amber-400"}`}>
-                        {isNearCampus ? "✓ Ready" : "Move closer"}
-                    </div>
+                    {isNearCampus ? (
+                        <div className="text-sm sm:text-base font-semibold text-green-400">✓ In reporting zone</div>
+                    ) : (
+                        <>
+                            <div className="text-sm sm:text-base font-semibold text-white">
+                                {formatDistance(distanceToCampus)} away
+                            </div>
+                            <div className="text-xs sm:text-sm font-medium text-amber-400">from zone</div>
+                        </>
+                    )}
                 </div>
                 <div className="flex items-center gap-2">
                     {session ? (
@@ -1241,7 +1329,19 @@ export default function ParkingMap() {
 
             {/* Bottom sheet: report form (only show when action selected) */}
             {selectedAction && (
-                <div className="fixed bottom-0 left-0 right-0 z-20 pt-3" style={{ animation: "slideUp 0.3s ease-out" }}>
+                <div
+                    className="fixed bottom-0 left-0 right-0 z-20 pt-3"
+                    style={{
+                        animation: "slideUp 0.3s ease-out",
+                        transform: `translateY(${panelSwipeOffsetY}px)`,
+                        transition: isPanelDragging ? "none" : "transform 0.18s ease",
+                        touchAction: "pan-x",
+                    }}
+                    onTouchStart={handlePanelTouchStart}
+                    onTouchMove={handlePanelTouchMove}
+                    onTouchEnd={handlePanelTouchEnd}
+                    onTouchCancel={handlePanelTouchEnd}
+                >
                     <div
                         className="rounded-t-3xl shadow-2xl p-4 sm:p-6 max-h-[80dvh] overflow-auto"
                         style={{
@@ -1259,13 +1359,9 @@ export default function ParkingMap() {
                         {/* Form header */}
                         <div className="flex items-center justify-between mb-4">
                             <h3 className="text-lg font-semibold">{REPORT_ACTION_CONFIG[selectedAction].label}</h3>
-                            <button
-                                onClick={() => setSelectedAction(null)}
-                                className="text-2xl"
-                                style={{ color: "var(--muted)" }}
-                            >
-                                ✕
-                            </button>
+                            <span className="text-xs font-medium" style={{ color: "var(--muted)" }}>
+                                Swipe down to close
+                            </span>
                         </div>
 
                         {/* Description */}
@@ -1378,7 +1474,7 @@ export default function ParkingMap() {
                 </div>
             ) : null}
 
-            {/* Latest update card - top, swipe right to dismiss */}
+            {/* Latest update card - top, swipe left/right/up to dismiss */}
             {isAuthReady && visibleLatestReport ? (
                 <div className="absolute left-0 right-0 top-16 z-20 px-3 sm:top-20 sm:px-4">
                     <div
@@ -1386,10 +1482,15 @@ export default function ParkingMap() {
                         style={{
                             backgroundColor: "var(--surface)",
                             borderColor: "var(--line)",
-                            transform: `translateX(${latestCardSwipeOffset}px)`,
-                            opacity: Math.max(0.32, 1 - latestCardSwipeOffset / 180),
+                            transform: `translate3d(${latestCardSwipeOffsetX}px, ${latestCardSwipeOffsetY}px, 0)`,
+                            opacity: Math.max(
+                                0.28,
+                                1 -
+                                    Math.max(Math.abs(latestCardSwipeOffsetX), Math.abs(Math.min(0, latestCardSwipeOffsetY))) /
+                                        180,
+                            ),
                             transition: isLatestCardDragging ? "none" : "transform 0.16s ease, opacity 0.16s ease",
-                            touchAction: "pan-y",
+                            touchAction: "none",
                         }}
                         onTouchStart={handleLatestReportTouchStart}
                         onTouchMove={handleLatestReportTouchMove}
@@ -1410,20 +1511,10 @@ export default function ParkingMap() {
                                     </span>
                                 </div>
                             </div>
-
-                            <button
-                                type="button"
-                                onClick={() => setDismissedLatestReportId(visibleLatestReport.id)}
-                                className="rounded-full px-2 py-1 text-xs font-semibold"
-                                style={{ color: "var(--muted)", backgroundColor: "var(--surface-strong)" }}
-                                aria-label="Dismiss latest update"
-                            >
-                                ✕
-                            </button>
                         </div>
 
                         <div className="mt-2 flex items-center justify-between text-[11px]" style={{ color: "var(--muted)" }}>
-                            <span>Swipe right to dismiss</span>
+                            <span>Swipe left, right, or up to dismiss</span>
                             <span>🔥 {heatmapData.features.length} hotspots</span>
                         </div>
                     </div>
