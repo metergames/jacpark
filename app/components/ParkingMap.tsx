@@ -1637,7 +1637,11 @@ export default function ParkingMap() {
             {/* Top bar: minimal info */}
             <div
                 className="absolute top-0 left-0 right-0 z-10 px-4 py-3 sm:py-4 flex items-center justify-between"
-                style={{ backgroundColor: "rgba(0,0,0,0.3)", backdropFilter: "blur(8px)" }}
+                style={{ 
+                    backgroundColor: "rgba(0,0,0,0.3)", 
+                    backdropFilter: "blur(8px)",
+                    paddingTop: "calc(0.75rem + max(0px, env(safe-area-inset-top)))"
+                }}
             >
                 <div className="flex items-center gap-2">
                     {isNearCampus ? (
