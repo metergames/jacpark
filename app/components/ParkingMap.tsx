@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type FormEvent, type TouchEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type TouchEvent } from "react";
 import { useRouter } from "next/navigation";
 import type { FeatureCollection, MultiPolygon, Polygon } from "geojson";
 import type { Session } from "@supabase/supabase-js";
@@ -509,6 +509,11 @@ export default function ParkingMap() {
     const [panelSwipeOffsetY, setPanelSwipeOffsetY] = useState<number>(0);
     const [isPanelDragging, setIsPanelDragging] = useState<boolean>(false);
     const [isMapReady, setIsMapReady] = useState<boolean>(false);
+    const [isPointEditorEnabled, setIsPointEditorEnabled] = useState<boolean>(false);
+    const [devPointActionType, setDevPointActionType] = useState<ReportActionType>("observing");
+    const [devPointFullnessLevel, setDevPointFullnessLevel] = useState<number>(3);
+    const [isAddingDevPoint, setIsAddingDevPoint] = useState<boolean>(false);
+    const [isSeedingReports, setIsSeedingReports] = useState<boolean>(false);
     const [isResettingReports, setIsResettingReports] = useState<boolean>(false);
     const [resetReportsFeedback, setResetReportsFeedback] = useState<string>("");
 
@@ -936,7 +941,7 @@ export default function ParkingMap() {
     }, []);
 
     const handleResetReportsForTesting = async (): Promise<void> => {
-        if (!DEV_REPORTS_RESET_ENABLED || isResettingReports) {
+        if (!DEV_REPORTS_RESET_ENABLED || isResettingReports || isSeedingReports || isAddingDevPoint) {
             return;
         }
 
@@ -987,6 +992,140 @@ export default function ParkingMap() {
             setIsResettingReports(false);
         }
     };
+
+    const handleSeedReportsForTesting = async (): Promise<void> => {
+        if (!DEV_REPORTS_RESET_ENABLED || isSeedingReports || isResettingReports || isAddingDevPoint) {
+            return;
+        }
+
+        const requestedCountInput = window.prompt("How many sample reports? (10-320)", "120");
+
+        if (requestedCountInput === null) {
+            return;
+        }
+
+        const requestedCount = Number.parseInt(requestedCountInput, 10);
+
+        if (Number.isNaN(requestedCount)) {
+            setResetReportsFeedback("Enter a valid number of reports.");
+            return;
+        }
+
+        const count = Math.min(Math.max(requestedCount, 10), 320);
+        const clearExisting = window.confirm(
+            "Clear existing reports before seeding?\nOK: clear and seed.\nCancel: keep existing and append sample data.",
+        );
+
+        setIsSeedingReports(true);
+        setResetReportsFeedback("");
+
+        try {
+            const headers: Record<string, string> = {
+                "content-type": "application/json",
+            };
+            const resetKey = process.env.NEXT_PUBLIC_REPORTS_RESET_KEY?.trim();
+
+            if (resetKey) {
+                headers[REPORTS_RESET_KEY_HEADER] = resetKey;
+            }
+
+            const response = await fetch("/api/reports/dev-seed", {
+                method: "POST",
+                cache: "no-store",
+                headers,
+                body: JSON.stringify({
+                    count,
+                    clearExisting,
+                }),
+            });
+
+            const payload = (await response.json().catch(() => ({}))) as {
+                seededCount?: number;
+                deletedCount?: number;
+                error?: string;
+            };
+
+            if (!response.ok) {
+                setResetReportsFeedback(payload.error ?? "Unable to seed sample reports.");
+                return;
+            }
+
+            setDismissedLatestReportId(null);
+            window.dispatchEvent(new Event("focus"));
+
+            const deletedSuffix = payload.deletedCount && payload.deletedCount > 0 ? `, cleared ${payload.deletedCount}` : "";
+            setResetReportsFeedback(`Seeded ${payload.seededCount ?? count} sample reports${deletedSuffix}.`);
+        } catch {
+            setResetReportsFeedback("Unable to seed sample reports.");
+        } finally {
+            setIsSeedingReports(false);
+        }
+    };
+
+    const handleAddDevPointAt = useCallback(
+        async (latitude: number, longitude: number): Promise<void> => {
+            if (
+                !DEV_REPORTS_RESET_ENABLED ||
+                !isPointEditorEnabled ||
+                isAddingDevPoint ||
+                isSeedingReports ||
+                isResettingReports
+            ) {
+                return;
+            }
+
+            setIsAddingDevPoint(true);
+            setResetReportsFeedback("");
+
+            try {
+                const headers: Record<string, string> = {
+                    "content-type": "application/json",
+                };
+                const resetKey = process.env.NEXT_PUBLIC_REPORTS_RESET_KEY?.trim();
+
+                if (resetKey) {
+                    headers[REPORTS_RESET_KEY_HEADER] = resetKey;
+                }
+
+                const response = await fetch("/api/reports/dev-seed", {
+                    method: "POST",
+                    cache: "no-store",
+                    headers,
+                    body: JSON.stringify({
+                        mode: "point",
+                        latitude,
+                        longitude,
+                        actionType: devPointActionType,
+                        fullnessLevel: devPointFullnessLevel,
+                    }),
+                });
+
+                const payload = (await response.json().catch(() => ({}))) as {
+                    seededCount?: number;
+                    error?: string;
+                };
+
+                if (!response.ok) {
+                    setResetReportsFeedback(payload.error ?? "Unable to add point sample report.");
+                    return;
+                }
+
+                setDismissedLatestReportId(null);
+                window.dispatchEvent(new Event("focus"));
+
+                const latLabel = latitude.toFixed(5);
+                const lonLabel = longitude.toFixed(5);
+                setResetReportsFeedback(
+                    `Added point at ${latLabel}, ${lonLabel} (${REPORT_ACTION_CONFIG[devPointActionType].label.toLowerCase()}).`,
+                );
+            } catch {
+                setResetReportsFeedback("Unable to add point sample report.");
+            } finally {
+                setIsAddingDevPoint(false);
+            }
+        },
+        [isPointEditorEnabled, isAddingDevPoint, isSeedingReports, isResettingReports, devPointActionType, devPointFullnessLevel],
+    );
 
     const handleReportSubmit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
         event.preventDefault();
@@ -1559,6 +1698,41 @@ export default function ParkingMap() {
         userLocationMarkerRef.current.setLngLat(markerPosition);
     }, [currentLocation, isMapReady]);
 
+    useEffect(() => {
+        if (!DEV_REPORTS_RESET_ENABLED || !isMapReady || !mapRef.current) {
+            return;
+        }
+
+        const map = mapRef.current;
+        const canvas = map.getCanvas();
+        const previousCursor = canvas.style.cursor;
+
+        canvas.style.cursor = isPointEditorEnabled ? "crosshair" : previousCursor;
+
+        const handleMapClick = (event: mapboxgl.MapMouseEvent): void => {
+            if (!isPointEditorEnabled || selectedAction || isAddingDevPoint || isSeedingReports || isResettingReports) {
+                return;
+            }
+
+            void handleAddDevPointAt(event.lngLat.lat, event.lngLat.lng);
+        };
+
+        map.on("click", handleMapClick);
+
+        return () => {
+            map.off("click", handleMapClick);
+            canvas.style.cursor = previousCursor;
+        };
+    }, [
+        isMapReady,
+        isPointEditorEnabled,
+        selectedAction,
+        isAddingDevPoint,
+        isSeedingReports,
+        isResettingReports,
+        handleAddDevPointAt,
+    ]);
+
     // Manage heatmap layer
     useEffect(() => {
         if (!isMapReady || !mapRef.current || !mapRef.current.isStyleLoaded()) {
@@ -1654,17 +1828,47 @@ export default function ParkingMap() {
                 <div className="flex flex-col items-end gap-1">
                     <div className="flex items-center gap-2">
                         {DEV_REPORTS_RESET_ENABLED ? (
-                            <button
-                                type="button"
-                                onClick={() => {
-                                    void handleResetReportsForTesting();
-                                }}
-                                disabled={isResettingReports}
-                                className="rounded-full px-3 py-1.5 text-[11px] font-semibold text-white transition disabled:opacity-60"
-                                style={{ backgroundColor: "rgba(244, 63, 94, 0.55)" }}
-                            >
-                                {isResettingReports ? "Clearing..." : "Clear reports"}
-                            </button>
+                            <>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setIsPointEditorEnabled((current) => !current);
+                                    }}
+                                    disabled={isSeedingReports || isResettingReports || isAddingDevPoint}
+                                    className="rounded-full px-3 py-1.5 text-[11px] font-semibold text-white transition disabled:opacity-60"
+                                    style={{
+                                        backgroundColor: isPointEditorEnabled
+                                            ? "rgba(59, 130, 246, 0.7)"
+                                            : "rgba(59, 130, 246, 0.4)",
+                                    }}
+                                >
+                                    {isPointEditorEnabled ? "Editor on" : "Point editor"}
+                                </button>
+
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        void handleSeedReportsForTesting();
+                                    }}
+                                    disabled={isSeedingReports || isResettingReports || isAddingDevPoint}
+                                    className="rounded-full px-3 py-1.5 text-[11px] font-semibold text-white transition disabled:opacity-60"
+                                    style={{ backgroundColor: "rgba(16, 185, 129, 0.55)" }}
+                                >
+                                    {isSeedingReports ? "Seeding..." : "Seed sample"}
+                                </button>
+
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        void handleResetReportsForTesting();
+                                    }}
+                                    disabled={isResettingReports || isSeedingReports || isAddingDevPoint}
+                                    className="rounded-full px-3 py-1.5 text-[11px] font-semibold text-white transition disabled:opacity-60"
+                                    style={{ backgroundColor: "rgba(244, 63, 94, 0.55)" }}
+                                >
+                                    {isResettingReports ? "Clearing..." : "Clear reports"}
+                                </button>
+                            </>
                         ) : null}
 
                         {session ? (
@@ -1682,6 +1886,70 @@ export default function ParkingMap() {
 
                     {resetReportsFeedback ? (
                         <p className="max-w-[180px] text-right text-[11px] font-medium text-white/90">{resetReportsFeedback}</p>
+                    ) : null}
+
+                    {DEV_REPORTS_RESET_ENABLED && isPointEditorEnabled ? (
+                        <div
+                            className="w-[240px] rounded-xl border p-2"
+                            style={{
+                                borderColor: "rgba(59,130,246,0.55)",
+                                backgroundColor: "rgba(12, 18, 31, 0.78)",
+                                backdropFilter: "blur(8px)",
+                            }}
+                        >
+                            <p className="text-[11px] font-semibold text-white">Tap map to place a simulated report</p>
+                            <p className="mt-1 text-[10px] text-white/75">Pick action + fullness, then tap any location.</p>
+
+                            <div className="mt-2 grid grid-cols-3 gap-1">
+                                {(["parked", "leaving", "observing"] as ReportActionType[]).map((actionType) => {
+                                    const isSelected = devPointActionType === actionType;
+
+                                    return (
+                                        <button
+                                            key={actionType}
+                                            type="button"
+                                            onClick={() => {
+                                                setDevPointActionType(actionType);
+                                            }}
+                                            className="rounded-md px-2 py-1 text-[10px] font-semibold text-white transition"
+                                            style={{
+                                                backgroundColor: isSelected ? "rgba(59,130,246,0.72)" : "rgba(148,163,184,0.32)",
+                                            }}
+                                        >
+                                            {actionType === "observing" ? "observe" : actionType}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+
+                            <div className="mt-2 grid grid-cols-5 gap-1">
+                                {[1, 2, 3, 4, 5].map((level) => {
+                                    const isSelected = devPointFullnessLevel === level;
+
+                                    return (
+                                        <button
+                                            key={level}
+                                            type="button"
+                                            onClick={() => {
+                                                setDevPointFullnessLevel(level);
+                                            }}
+                                            className="rounded-md px-0 py-1 text-[10px] font-semibold text-white transition"
+                                            style={{
+                                                backgroundColor: isSelected ? "rgba(16,185,129,0.7)" : "rgba(148,163,184,0.3)",
+                                            }}
+                                        >
+                                            {level}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+
+                            <p className="mt-2 text-[10px] text-white/80">
+                                {isAddingDevPoint
+                                    ? "Adding point..."
+                                    : `${REPORT_ACTION_CONFIG[devPointActionType].label} · fullness ${devPointFullnessLevel}`}
+                            </p>
+                        </div>
                     ) : null}
                 </div>
             </div>
