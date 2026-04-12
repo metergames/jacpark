@@ -10,7 +10,7 @@ import { CAMPUS_RADIUS_METERS, haversineDistanceMeters, type LatLng } from "../l
 import { getSupabaseBrowserClient } from "../lib/supabaseBrowser";
 import { useTheme } from "../lib/ThemeContext";
 import { checkAndRequestNotificationPermission, showNotification, subscribeToPushNotifications } from "../lib/notifications";
-import UserDashboard from "./UserDashboard";
+import UserDashboard, { type PremiumStatus } from "./UserDashboard";
 import SettingsModal from "./SettingsModal";
 import LeaderboardModal from "./LeaderboardModal";
 import "mapbox-gl/dist/mapbox-gl.css";
@@ -44,6 +44,12 @@ type ReportsResponse = {
     viewerParkingState?: ViewerParkingState | null;
     error?: string;
 };
+
+type PremiumStatusResponse = Partial<PremiumStatus> & {
+    error?: string;
+};
+
+type ZoneAvailabilityState = "open" | "limited" | "full";
 
 type ReportResponse = {
     report?: ParkingReport;
@@ -83,6 +89,32 @@ const SUBMIT_RETRY_BASE_DELAY_MS = 400;
 const SUBMIT_RETRY_MAX_ATTEMPTS = 3;
 const DEV_REPORTS_RESET_ENABLED = process.env.NODE_ENV !== "production";
 const REPORTS_RESET_KEY_HEADER = "x-omnilots-reset-key";
+const DEFAULT_PREMIUM_MONTH_COST_POINTS = 60;
+
+const NON_PREMIUM_ZONE_STYLE: Record<
+    ZoneAvailabilityState,
+    {
+        fillColor: string;
+        fillOpacity: number;
+        lineColor: string;
+    }
+> = {
+    open: {
+        fillColor: "#16a34a",
+        fillOpacity: 0.24,
+        lineColor: "#166534",
+    },
+    limited: {
+        fillColor: "#f59e0b",
+        fillOpacity: 0.24,
+        lineColor: "#b45309",
+    },
+    full: {
+        fillColor: "#dc2626",
+        fillOpacity: 0.26,
+        lineColor: "#991b1b",
+    },
+};
 
 const TRANSIENT_SUBMIT_STATUSES: ReadonlySet<number> = new Set([408, 425, 429, 500, 502, 503, 504]);
 
@@ -313,6 +345,22 @@ const deriveAvailabilityFromFullness = (fullnessLevel: number): ParkingAvailabil
     }
 
     return "full";
+};
+
+const deriveFullnessValue = (report: ParkingReport): number => {
+    if (Number.isInteger(report.fullnessLevel) && report.fullnessLevel !== null) {
+        return clampNumber(report.fullnessLevel, 1, 5);
+    }
+
+    if (report.availability === "open") {
+        return 2;
+    }
+
+    if (report.availability === "limited") {
+        return 3.2;
+    }
+
+    return 4.7;
 };
 
 const buildOptimisticReport = (
@@ -574,6 +622,11 @@ export default function ParkingMap() {
     const [isSeedingReports, setIsSeedingReports] = useState<boolean>(false);
     const [isResettingReports, setIsResettingReports] = useState<boolean>(false);
     const [resetReportsFeedback, setResetReportsFeedback] = useState<string>("");
+    const [isPremiumActive, setIsPremiumActive] = useState<boolean>(false);
+    const [premiumExpiresAt, setPremiumExpiresAt] = useState<string | null>(null);
+    const [premiumMonthCostPoints, setPremiumMonthCostPoints] = useState<number>(DEFAULT_PREMIUM_MONTH_COST_POINTS);
+    const [parkedCarLocation, setParkedCarLocation] = useState<PremiumStatus["parkedCarLocation"]>(null);
+    const [isFindingParkedCar, setIsFindingParkedCar] = useState<boolean>(false);
 
     const { isNearCampus, distanceToCampus, locationError, currentLocation } = useCampusProximity();
 
@@ -596,6 +649,54 @@ export default function ParkingMap() {
 
         return isActionDisabledForParkState(selectedAction, isUserParkedToday);
     }, [selectedAction, isUserParkedToday]);
+
+    const zoneAvailability = useMemo<ZoneAvailabilityState>(() => {
+        const recentReports = reports.filter((report) => !report.id.startsWith("optimistic-")).slice(0, 32);
+
+        if (recentReports.length === 0) {
+            return "limited";
+        }
+
+        const nowMs = Date.now();
+        let weightedFullness = 0;
+        let totalWeight = 0;
+
+        for (const report of recentReports) {
+            const reportAgeMs = Math.max(0, nowMs - Date.parse(report.createdAt));
+            const recencyWeight = Math.exp(-reportAgeMs / (45 * 60 * 1000));
+            weightedFullness += deriveFullnessValue(report) * recencyWeight;
+            totalWeight += recencyWeight;
+        }
+
+        const averageFullness = totalWeight > 0 ? weightedFullness / totalWeight : 3;
+
+        if (averageFullness <= 2.35) {
+            return "open";
+        }
+
+        if (averageFullness <= 3.55) {
+            return "limited";
+        }
+
+        return "full";
+    }, [reports]);
+
+    const premiumExpiryLabel = useMemo(() => {
+        if (!premiumExpiresAt) {
+            return "";
+        }
+
+        const expiryDate = new Date(premiumExpiresAt);
+
+        if (Number.isNaN(expiryDate.getTime())) {
+            return "";
+        }
+
+        return expiryDate.toLocaleDateString([], {
+            month: "short",
+            day: "numeric",
+        });
+    }, [premiumExpiresAt]);
 
     // Complex hotspot model: privacy-safe gridding, time decay, conflict scoring, and spatial merge.
     const heatmapData = useMemo(() => {
@@ -952,6 +1053,86 @@ export default function ParkingMap() {
         }
     }, [selectedAction, isUserParkedToday]);
 
+    const applyPremiumStatus = useCallback((payload: PremiumStatusResponse): void => {
+        const premiumExpiresAtValue = typeof payload.premiumExpiresAt === "string" ? payload.premiumExpiresAt : null;
+        const premiumActiveValue = Boolean(payload.isPremium);
+
+        setPremiumExpiresAt(premiumExpiresAtValue);
+        setIsPremiumActive(premiumActiveValue);
+        setPremiumMonthCostPoints(
+            Number.isFinite(payload.premiumMonthCostPoints)
+                ? Number(payload.premiumMonthCostPoints)
+                : DEFAULT_PREMIUM_MONTH_COST_POINTS,
+        );
+
+        if (
+            premiumActiveValue &&
+            payload.parkedCarLocation &&
+            typeof payload.parkedCarLocation.latitude === "number" &&
+            typeof payload.parkedCarLocation.longitude === "number" &&
+            typeof payload.parkedCarLocation.parkedAt === "string"
+        ) {
+            setParkedCarLocation(payload.parkedCarLocation);
+            return;
+        }
+
+        setParkedCarLocation(null);
+    }, []);
+
+    useEffect(() => {
+        if (!session?.access_token) {
+            setIsPremiumActive(false);
+            setPremiumExpiresAt(null);
+            setParkedCarLocation(null);
+            return;
+        }
+
+        let isActive = true;
+
+        const loadPremiumStatus = async (): Promise<void> => {
+            try {
+                const response = await fetch("/api/premium", {
+                    method: "GET",
+                    cache: "no-store",
+                    headers: {
+                        authorization: `Bearer ${session.access_token}`,
+                    },
+                });
+
+                const payload = (await response.json().catch(() => ({}))) as PremiumStatusResponse;
+
+                if (!isActive || !response.ok) {
+                    return;
+                }
+
+                applyPremiumStatus(payload);
+            } catch {
+                if (isActive) {
+                    setIsPremiumActive(false);
+                    setPremiumExpiresAt(null);
+                    setParkedCarLocation(null);
+                }
+            }
+        };
+
+        void loadPremiumStatus();
+
+        const refreshPremiumStatus = (): void => {
+            if (document.visibilityState !== "visible") {
+                return;
+            }
+
+            void loadPremiumStatus();
+        };
+
+        window.addEventListener("focus", refreshPremiumStatus);
+
+        return () => {
+            isActive = false;
+            window.removeEventListener("focus", refreshPremiumStatus);
+        };
+    }, [session?.access_token, applyPremiumStatus]);
+
     const handleRecenterToUser = useCallback(async (): Promise<void> => {
         if (!mapRef.current || isRecenteringMap) {
             return;
@@ -980,6 +1161,26 @@ export default function ParkingMap() {
             setIsRecenteringMap(false);
         }
     }, [currentLocation, isRecenteringMap]);
+
+    const handleFindMyCar = useCallback((): void => {
+        if (!mapRef.current || !parkedCarLocation || isFindingParkedCar) {
+            return;
+        }
+
+        setIsFindingParkedCar(true);
+
+        mapRef.current.flyTo({
+            center: [parkedCarLocation.longitude, parkedCarLocation.latitude],
+            zoom: Math.max(mapRef.current.getZoom(), 17.1),
+            speed: 1,
+            curve: 1.2,
+            essential: true,
+        });
+
+        window.setTimeout(() => {
+            setIsFindingParkedCar(false);
+        }, 700);
+    }, [parkedCarLocation, isFindingParkedCar]);
 
     const handleSignOut = async (): Promise<void> => {
         setAuthFeedback("");
@@ -1283,6 +1484,7 @@ export default function ParkingMap() {
 
         const previousReportsSnapshot = reports;
         const previousParkState = isUserParkedToday;
+        const previousParkedCarLocation = parkedCarLocation;
 
         setSelectedAction(null);
         setFullnessLevel(null);
@@ -1308,8 +1510,14 @@ export default function ParkingMap() {
 
             if (actionToSubmit === "parked") {
                 setIsUserParkedToday(true);
+                setParkedCarLocation({
+                    latitude: reporterLocation.latitude,
+                    longitude: reporterLocation.longitude,
+                    parkedAt: new Date().toISOString(),
+                });
             } else if (actionToSubmit === "leaving") {
                 setIsUserParkedToday(false);
+                setParkedCarLocation(null);
             }
 
             const { response, payload } = await submitReportWithRetry(
@@ -1322,6 +1530,7 @@ export default function ParkingMap() {
             if (!response.ok || !payload.report) {
                 setReports(previousReportsSnapshot);
                 setIsUserParkedToday(previousParkState);
+                setParkedCarLocation(previousParkedCarLocation);
                 setReportFeedback(payload.error ?? "Unable to sync this update right now. Please try again.");
                 return;
             }
@@ -1333,6 +1542,16 @@ export default function ParkingMap() {
                     HEATMAP_REPORTS_LIMIT,
                 ),
             );
+
+            if (actionToSubmit === "parked") {
+                setParkedCarLocation({
+                    latitude: createdReport.reporterLatitude,
+                    longitude: createdReport.reporterLongitude,
+                    parkedAt: createdReport.createdAt,
+                });
+            } else if (actionToSubmit === "leaving") {
+                setParkedCarLocation(null);
+            }
 
             // Show notification for successful parking update
             const actionMessages: Record<ReportActionType, string> = {
@@ -1348,6 +1567,7 @@ export default function ParkingMap() {
         } catch {
             setReports(previousReportsSnapshot);
             setIsUserParkedToday(previousParkState);
+            setParkedCarLocation(previousParkedCarLocation);
             setReportFeedback("Unable to sync this update right now. Please try again.");
         } finally {
             setIsSubmittingReport(false);
@@ -1901,6 +2121,23 @@ export default function ParkingMap() {
         }
 
         const map = mapRef.current;
+
+        if (!isPremiumActive) {
+            if (map.getLayer(REPORTS_HEATMAP_LAYER_ID)) {
+                map.removeLayer(REPORTS_HEATMAP_LAYER_ID);
+            }
+
+            if (map.getLayer(REPORTS_HEATMAP_POINTS_LAYER_ID)) {
+                map.removeLayer(REPORTS_HEATMAP_POINTS_LAYER_ID);
+            }
+
+            if (map.getSource(REPORTS_HEATMAP_SOURCE_ID)) {
+                map.removeSource(REPORTS_HEATMAP_SOURCE_ID);
+            }
+
+            return;
+        }
+
         const data = heatmapData;
 
         // Ensure source exists
@@ -1962,7 +2199,30 @@ export default function ParkingMap() {
         if (map.getLayer(REPORTS_HEATMAP_POINTS_LAYER_ID)) {
             map.removeLayer(REPORTS_HEATMAP_POINTS_LAYER_ID);
         }
-    }, [heatmapData, isMapReady]);
+    }, [heatmapData, isMapReady, isPremiumActive]);
+
+    useEffect(() => {
+        if (!isMapReady || !mapRef.current || !mapRef.current.isStyleLoaded()) {
+            return;
+        }
+
+        const map = mapRef.current;
+
+        if (!map.getLayer(BOUNDARY_FILL_LAYER_ID)) {
+            return;
+        }
+
+        const nextFillColor = isPremiumActive ? "#0ea5e9" : NON_PREMIUM_ZONE_STYLE[zoneAvailability].fillColor;
+        const nextFillOpacity = isPremiumActive ? 0.2 : NON_PREMIUM_ZONE_STYLE[zoneAvailability].fillOpacity;
+        const nextLineColor = isPremiumActive ? "#0369a1" : NON_PREMIUM_ZONE_STYLE[zoneAvailability].lineColor;
+
+        map.setPaintProperty(BOUNDARY_FILL_LAYER_ID, "fill-color", nextFillColor);
+        map.setPaintProperty(BOUNDARY_FILL_LAYER_ID, "fill-opacity", nextFillOpacity);
+
+        if (map.getLayer(BOUNDARY_LINE_LAYER_ID)) {
+            map.setPaintProperty(BOUNDARY_LINE_LAYER_ID, "line-color", nextLineColor);
+        }
+    }, [isMapReady, isPremiumActive, zoneAvailability]);
 
     return (
         <section className="relative h-[100dvh] w-screen overflow-hidden" style={{ overscrollBehaviorY: "contain" }}>
@@ -1978,17 +2238,48 @@ export default function ParkingMap() {
                     paddingTop: "calc(0.75rem + max(0px, env(safe-area-inset-top)))",
                 }}
             >
-                <div className="flex items-center gap-2">
-                    {isNearCampus ? (
-                        <div className="text-sm sm:text-base font-semibold text-green-400">✓ In reporting zone</div>
-                    ) : (
-                        <>
-                            <div className="text-sm sm:text-base font-semibold text-white">
-                                {formatDistance(distanceToCampus)} away
-                            </div>
-                            <div className="text-xs sm:text-sm font-medium text-amber-400">from zone</div>
-                        </>
-                    )}
+                <div className="flex flex-col gap-1">
+                    <div className="flex items-center gap-2">
+                        {isNearCampus ? (
+                            <div className="text-sm sm:text-base font-semibold text-green-400">✓ In reporting zone</div>
+                        ) : (
+                            <>
+                                <div className="text-sm sm:text-base font-semibold text-white">
+                                    {formatDistance(distanceToCampus)} away
+                                </div>
+                                <div className="text-xs sm:text-sm font-medium text-amber-400">from zone</div>
+                            </>
+                        )}
+                    </div>
+
+                    <div className="flex items-center gap-2 text-[11px] sm:text-xs">
+                        {isPremiumActive ? (
+                            <span className="rounded-full border border-amber-300/60 bg-amber-500/25 px-2.5 py-1 font-semibold text-amber-100">
+                                Premium heatmap live
+                            </span>
+                        ) : (
+                            <span
+                                className="rounded-full border px-2.5 py-1 font-semibold text-white"
+                                style={{
+                                    borderColor:
+                                        zoneAvailability === "open"
+                                            ? "rgba(74, 222, 128, 0.65)"
+                                            : zoneAvailability === "limited"
+                                              ? "rgba(251, 191, 36, 0.65)"
+                                              : "rgba(248, 113, 113, 0.7)",
+                                    backgroundColor:
+                                        zoneAvailability === "open"
+                                            ? "rgba(34, 197, 94, 0.24)"
+                                            : zoneAvailability === "limited"
+                                              ? "rgba(245, 158, 11, 0.24)"
+                                              : "rgba(220, 38, 38, 0.24)",
+                                }}
+                            >
+                                Zone status:{" "}
+                                {zoneAvailability === "open" ? "Open" : zoneAvailability === "limited" ? "Limited" : "Full"}
+                            </span>
+                        )}
+                    </div>
                 </div>
                 <div className="flex flex-col items-end gap-1">
                     <div className="flex items-center gap-2">
@@ -2053,6 +2344,24 @@ export default function ParkingMap() {
 
                     {resetReportsFeedback ? (
                         <p className="max-w-[180px] text-right text-[11px] font-medium text-white/90">{resetReportsFeedback}</p>
+                    ) : null}
+
+                    {session && !isPremiumActive ? (
+                        <button
+                            type="button"
+                            onClick={() => setShowDashboard(true)}
+                            className="rounded-full border px-3 py-1 text-[11px] font-semibold text-amber-100 transition hover:bg-amber-300/20"
+                            style={{
+                                borderColor: "rgba(252, 211, 77, 0.62)",
+                                backgroundColor: "rgba(217, 119, 6, 0.26)",
+                            }}
+                        >
+                            Unlock Premium ({premiumMonthCostPoints} pts/month)
+                        </button>
+                    ) : null}
+
+                    {session && isPremiumActive && premiumExpiryLabel ? (
+                        <p className="text-[11px] font-medium text-amber-100/90">Premium until {premiumExpiryLabel}</p>
                     ) : null}
 
                     {DEV_REPORTS_RESET_ENABLED && isPointEditorEnabled ? (
@@ -2242,6 +2551,45 @@ export default function ParkingMap() {
                 <div className="fixed bottom-6 sm:bottom-6 right-4 sm:right-6 z-10 flex flex-col gap-3 sm:gap-3">
                     {!selectedAction && (
                         <>
+                            {isPremiumActive ? (
+                                <button
+                                    type="button"
+                                    onClick={handleFindMyCar}
+                                    disabled={!parkedCarLocation || isFindingParkedCar}
+                                    className="group relative flex min-w-[11.75rem] items-center gap-2.5 overflow-hidden rounded-2xl border px-4 py-3 text-left text-white backdrop-blur-md transition duration-300 hover:-translate-y-0.5 disabled:opacity-55"
+                                    style={{
+                                        background: "linear-gradient(135deg, rgba(91, 33, 182, 0.9), rgba(126, 34, 206, 0.9))",
+                                        borderColor: "rgba(216, 180, 254, 0.62)",
+                                        boxShadow: "0 16px 32px rgba(91, 33, 182, 0.38)",
+                                        cursor: !parkedCarLocation || isFindingParkedCar ? "not-allowed" : "pointer",
+                                        animation: "jac-action-button-in 0.42s cubic-bezier(0.22, 1, 0.36, 1) 40ms both",
+                                    }}
+                                    title={
+                                        parkedCarLocation ? "Center map on saved parked car" : "Park first to save car location"
+                                    }
+                                >
+                                    <span className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.28),transparent_62%)] opacity-75" />
+                                    <span className="relative flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full border border-white/30 bg-white/20">
+                                        <svg
+                                            viewBox="0 0 24 24"
+                                            className="h-5 w-5"
+                                            fill="none"
+                                            stroke="currentColor"
+                                            strokeWidth="2"
+                                        >
+                                            <path d="M6 16h12" />
+                                            <path d="M7 16l1.5-5h7L17 16" />
+                                            <circle cx="8" cy="18" r="1.5" />
+                                            <circle cx="16" cy="18" r="1.5" />
+                                            <path d="M12 4v3" />
+                                        </svg>
+                                    </span>
+                                    <span className="relative text-xs font-bold leading-tight sm:text-sm">
+                                        {parkedCarLocation ? "Find my car" : "Park to enable Find my car"}
+                                    </span>
+                                </button>
+                            ) : null}
+
                             <button
                                 type="button"
                                 onClick={() => {
@@ -2363,6 +2711,9 @@ export default function ParkingMap() {
                     onSettingsClick={() => setShowSettings(true)}
                     onLeaderboardClick={() => setShowLeaderboard(true)}
                     onClose={() => setShowDashboard(false)}
+                    onPremiumStatusChange={(status) => {
+                        applyPremiumStatus(status);
+                    }}
                 />
             )}
 
