@@ -1,10 +1,10 @@
 {
-    "id": "/",
+    "id": "/map",
     "name": "Omnilots",
     "short_name": "Omnilots",
     "description": "Crowdsourced parking reports for John Abbott College.",
     "lang": "en-CA",
-    "start_url": "/",
+    "start_url": "/map",
     "scope": "/",
     "display": "standalone",
     "display_override": ["fullscreen", "standalone"],

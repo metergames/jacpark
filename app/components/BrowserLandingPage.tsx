@@ -72,8 +72,12 @@ export default function BrowserLandingPage() {
         }
 
         await deferredPrompt.prompt();
-        await deferredPrompt.userChoice;
+        const installChoice = await deferredPrompt.userChoice;
         setDeferredPrompt(null);
+
+        if (installChoice.outcome === "accepted") {
+            router.replace("/map");
+        }
     };
 
     const PrimaryCTA = ({ compact = false }: { compact?: boolean }) => (

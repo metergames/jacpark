@@ -450,6 +450,32 @@ export async function POST(request: Request) {
 
         const report = toApiReport(data as ParkingReportRow);
 
+        if (actionType === "parked") {
+            const { error: parkingStateError } = await supabase.from("user_parking_state").upsert(
+                {
+                    user_id: user.id,
+                    parked_car_latitude: report.reporterLatitude,
+                    parked_car_longitude: report.reporterLongitude,
+                    parked_at: report.createdAt,
+                },
+                {
+                    onConflict: "user_id",
+                },
+            );
+
+            if (parkingStateError) {
+                console.warn("Unable to persist parked car location:", parkingStateError.message);
+            }
+        }
+
+        if (actionType === "leaving") {
+            const { error: parkingStateError } = await supabase.from("user_parking_state").delete().eq("user_id", user.id);
+
+            if (parkingStateError) {
+                console.warn("Unable to clear parked car location:", parkingStateError.message);
+            }
+        }
+
         void sendPushNotificationToAll({
             title: "Omnilots",
             body: `New ${actionType} update was posted for parking conditions.`,

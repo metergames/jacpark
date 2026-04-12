@@ -1,9 +1,21 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { getUserRank } from "../lib/leaderboard";
 import { getSupabaseBrowserClient } from "../lib/supabaseBrowser";
+
+export type PremiumStatus = {
+    points: number;
+    premiumExpiresAt: string | null;
+    isPremium: boolean;
+    premiumMonthCostPoints: number;
+    parkedCarLocation: {
+        latitude: number;
+        longitude: number;
+        parkedAt: string;
+    } | null;
+};
 
 interface UserDashboardProps {
     session: Session | null;
@@ -12,6 +24,7 @@ interface UserDashboardProps {
     onSettingsClick: () => void;
     onLeaderboardClick: () => void;
     onClose: () => void;
+    onPremiumStatusChange?: (status: PremiumStatus) => void;
 }
 
 export default function UserDashboard({
@@ -21,13 +34,92 @@ export default function UserDashboard({
     onSettingsClick,
     onLeaderboardClick,
     onClose,
+    onPremiumStatusChange,
 }: UserDashboardProps) {
     const [userPoints, setUserPoints] = useState<number>(0);
     const [userRank, setUserRank] = useState<number | null>(null);
     const [userReports, setUserReports] = useState<number>(0);
+    const [premiumExpiresAt, setPremiumExpiresAt] = useState<string | null>(null);
+    const [premiumMonthCostPoints, setPremiumMonthCostPoints] = useState<number>(60);
+    const [hasSavedCar, setHasSavedCar] = useState<boolean>(false);
+    const [premiumFeedback, setPremiumFeedback] = useState<string>("");
+    const [isBuyingPremium, setIsBuyingPremium] = useState<boolean>(false);
+
+    const isPremiumActive = useMemo(() => {
+        if (!premiumExpiresAt) {
+            return false;
+        }
+
+        const expiresMs = Date.parse(premiumExpiresAt);
+
+        if (Number.isNaN(expiresMs)) {
+            return false;
+        }
+
+        return expiresMs > Date.now();
+    }, [premiumExpiresAt]);
+
+    const formattedPremiumExpiry = useMemo(() => {
+        if (!premiumExpiresAt) {
+            return "";
+        }
+
+        const parsedDate = new Date(premiumExpiresAt);
+
+        if (Number.isNaN(parsedDate.getTime())) {
+            return "";
+        }
+
+        return parsedDate.toLocaleDateString([], {
+            month: "short",
+            day: "numeric",
+            year: "numeric",
+        });
+    }, [premiumExpiresAt]);
+
+    const applyPremiumStatus = useCallback(
+        (status: PremiumStatus): void => {
+            setUserPoints(status.points);
+            setPremiumExpiresAt(status.premiumExpiresAt);
+            setPremiumMonthCostPoints(status.premiumMonthCostPoints);
+            setHasSavedCar(Boolean(status.parkedCarLocation));
+            onPremiumStatusChange?.(status);
+        },
+        [onPremiumStatusChange],
+    );
+
+    const loadPremiumStatus = useCallback(async (accessToken: string): Promise<PremiumStatus | null> => {
+        const response = await fetch("/api/premium", {
+            method: "GET",
+            cache: "no-store",
+            headers: {
+                authorization: `Bearer ${accessToken}`,
+            },
+        });
+
+        const payload = (await response.json().catch(() => ({}))) as Partial<PremiumStatus> & { error?: string };
+
+        if (!response.ok) {
+            throw new Error(payload.error ?? "Unable to load premium status.");
+        }
+
+        return {
+            points: Number.isFinite(payload.points) ? Number(payload.points) : 0,
+            premiumExpiresAt: typeof payload.premiumExpiresAt === "string" ? payload.premiumExpiresAt : null,
+            isPremium: Boolean(payload.isPremium),
+            premiumMonthCostPoints: Number.isFinite(payload.premiumMonthCostPoints) ? Number(payload.premiumMonthCostPoints) : 60,
+            parkedCarLocation:
+                payload.parkedCarLocation &&
+                typeof payload.parkedCarLocation.latitude === "number" &&
+                typeof payload.parkedCarLocation.longitude === "number" &&
+                typeof payload.parkedCarLocation.parkedAt === "string"
+                    ? payload.parkedCarLocation
+                    : null,
+        };
+    }, []);
 
     useEffect(() => {
-        if (!session?.user?.id) {
+        if (!session?.user?.id || !session.access_token) {
             return;
         }
 
@@ -43,6 +135,14 @@ export default function UserDashboard({
                     .select("id", { count: "exact", head: true })
                     .eq("user_id", session.user.id);
 
+                let premiumStatus: PremiumStatus | null = null;
+
+                try {
+                    premiumStatus = await loadPremiumStatus(session.access_token);
+                } catch {
+                    premiumStatus = null;
+                }
+
                 if (!isActive) {
                     return;
                 }
@@ -50,6 +150,10 @@ export default function UserDashboard({
                 setUserPoints(rankData?.points ?? 0);
                 setUserRank(rankData?.rank ?? null);
                 setUserReports(count ?? 0);
+
+                if (premiumStatus) {
+                    applyPremiumStatus(premiumStatus);
+                }
             } catch {
                 if (!isActive) {
                     return;
@@ -58,6 +162,8 @@ export default function UserDashboard({
                 setUserPoints(0);
                 setUserRank(null);
                 setUserReports(0);
+                setPremiumExpiresAt(null);
+                setHasSavedCar(false);
             }
         };
 
@@ -66,7 +172,58 @@ export default function UserDashboard({
         return () => {
             isActive = false;
         };
-    }, [session?.user?.id]);
+    }, [session?.user?.id, session?.access_token, applyPremiumStatus, loadPremiumStatus]);
+
+    const handlePurchasePremium = useCallback(async (): Promise<void> => {
+        if (!session?.access_token || isBuyingPremium) {
+            return;
+        }
+
+        setIsBuyingPremium(true);
+        setPremiumFeedback("");
+
+        try {
+            const response = await fetch("/api/premium", {
+                method: "POST",
+                cache: "no-store",
+                headers: {
+                    "content-type": "application/json",
+                    authorization: `Bearer ${session.access_token}`,
+                },
+                body: JSON.stringify({ months: 1 }),
+            });
+
+            const payload = (await response.json().catch(() => ({}))) as Partial<PremiumStatus> & { error?: string };
+
+            if (!response.ok) {
+                setPremiumFeedback(payload.error ?? "Unable to purchase premium.");
+                return;
+            }
+
+            const premiumStatus: PremiumStatus = {
+                points: Number.isFinite(payload.points) ? Number(payload.points) : userPoints,
+                premiumExpiresAt: typeof payload.premiumExpiresAt === "string" ? payload.premiumExpiresAt : premiumExpiresAt,
+                isPremium: Boolean(payload.isPremium),
+                premiumMonthCostPoints: Number.isFinite(payload.premiumMonthCostPoints)
+                    ? Number(payload.premiumMonthCostPoints)
+                    : premiumMonthCostPoints,
+                parkedCarLocation:
+                    payload.parkedCarLocation &&
+                    typeof payload.parkedCarLocation.latitude === "number" &&
+                    typeof payload.parkedCarLocation.longitude === "number" &&
+                    typeof payload.parkedCarLocation.parkedAt === "string"
+                        ? payload.parkedCarLocation
+                        : null,
+            };
+
+            applyPremiumStatus(premiumStatus);
+            setPremiumFeedback(premiumStatus.isPremium ? "Premium time added successfully." : "Premium updated.");
+        } catch {
+            setPremiumFeedback("Unable to purchase premium.");
+        } finally {
+            setIsBuyingPremium(false);
+        }
+    }, [session?.access_token, isBuyingPremium, applyPremiumStatus, userPoints, premiumExpiresAt, premiumMonthCostPoints]);
 
     if (!session?.user) {
         return null;
@@ -124,6 +281,60 @@ export default function UserDashboard({
                     <p className="text-xs mt-2" style={{ color: "var(--muted)" }}>
                         Earn points from reports
                     </p>
+
+                    <div
+                        className="mt-3 rounded-lg p-3"
+                        style={{
+                            background: isPremiumActive
+                                ? "linear-gradient(135deg, rgba(250, 204, 21, 0.22), rgba(245, 158, 11, 0.2))"
+                                : "rgba(15, 23, 42, 0.22)",
+                            borderColor: isPremiumActive ? "rgba(245, 158, 11, 0.42)" : "rgba(148, 163, 184, 0.36)",
+                            borderWidth: "1px",
+                        }}
+                    >
+                        <p className="text-xs font-semibold" style={{ color: "var(--foreground)" }}>
+                            {isPremiumActive ? "Premium Active" : "Premium Locked"}
+                        </p>
+                        <p className="mt-1 text-xs" style={{ color: "var(--muted)" }}>
+                            {isPremiumActive ? `Expires ${formattedPremiumExpiry || "soon"}` : "Unlock heatmaps + Find My Car."}
+                        </p>
+                        <button
+                            onClick={() => {
+                                void handlePurchasePremium();
+                            }}
+                            disabled={isBuyingPremium || userPoints < premiumMonthCostPoints}
+                            className="mt-2 w-full rounded-lg px-3 py-2 text-xs font-semibold transition"
+                            style={{
+                                backgroundColor:
+                                    isBuyingPremium || userPoints < premiumMonthCostPoints
+                                        ? "rgba(148, 163, 184, 0.34)"
+                                        : "rgba(15, 163, 127, 0.82)",
+                                color: "white",
+                                cursor: isBuyingPremium || userPoints < premiumMonthCostPoints ? "not-allowed" : "pointer",
+                                opacity: isBuyingPremium ? 0.75 : 1,
+                            }}
+                        >
+                            {isBuyingPremium
+                                ? "Processing..."
+                                : `${isPremiumActive ? "Add" : "Buy"} 1 month (${premiumMonthCostPoints} points)`}
+                        </button>
+
+                        {userPoints < premiumMonthCostPoints ? (
+                            <p className="mt-2 text-[11px]" style={{ color: "var(--muted)" }}>
+                                Need {premiumMonthCostPoints - userPoints} more points.
+                            </p>
+                        ) : null}
+
+                        {hasSavedCar && isPremiumActive ? (
+                            <p className="mt-2 text-[11px] text-emerald-600">Find My Car is ready on the map.</p>
+                        ) : null}
+
+                        {premiumFeedback ? (
+                            <p className="mt-2 text-[11px] font-medium" style={{ color: "var(--foreground)" }}>
+                                {premiumFeedback}
+                            </p>
+                        ) : null}
+                    </div>
                 </div>
 
                 {/* Stats */}

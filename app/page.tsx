@@ -9,15 +9,19 @@ export default function Home() {
     const [isStandalone, setIsStandalone] = useState<boolean | null>(null);
 
     useEffect(() => {
-        const standaloneMode =
+        const isInstalledDisplayMode =
             window.matchMedia("(display-mode: standalone)").matches ||
-            (typeof navigator !== "undefined" && "standalone" in navigator && Boolean((navigator as Navigator & { standalone?: boolean }).standalone));
+            window.matchMedia("(display-mode: fullscreen)").matches ||
+            window.matchMedia("(display-mode: minimal-ui)").matches ||
+            (typeof navigator !== "undefined" &&
+                "standalone" in navigator &&
+                Boolean((navigator as Navigator & { standalone?: boolean }).standalone));
 
-        if (standaloneMode) {
-            router.replace("/login");
+        if (isInstalledDisplayMode) {
+            router.replace("/map");
         }
 
-        setIsStandalone(standaloneMode);
+        setIsStandalone(isInstalledDisplayMode);
     }, [router]);
 
     if (isStandalone === null || isStandalone) {
