@@ -101,17 +101,17 @@ const NON_PREMIUM_ZONE_STYLE: Record<
 > = {
     open: {
         fillColor: "#16a34a",
-        fillOpacity: 0.24,
+        fillOpacity: 0.3,
         lineColor: "#166534",
     },
     limited: {
         fillColor: "#f59e0b",
-        fillOpacity: 0.24,
+        fillOpacity: 0.3,
         lineColor: "#b45309",
     },
     full: {
         fillColor: "#dc2626",
-        fillOpacity: 0.26,
+        fillOpacity: 0.32,
         lineColor: "#991b1b",
     },
 };
@@ -653,7 +653,7 @@ export default function ParkingMap() {
     }, [selectedAction, isUserParkedToday]);
 
     const zoneAvailability = useMemo<ZoneAvailabilityState>(() => {
-        const recentReports = reports.filter((report) => !report.id.startsWith("optimistic-")).slice(0, 32);
+        const recentReports = reports.filter((report) => !report.id.startsWith("optimistic-")).slice(0, 40);
 
         if (recentReports.length === 0) {
             return "limited";
@@ -665,18 +665,31 @@ export default function ParkingMap() {
 
         for (const report of recentReports) {
             const reportAgeMs = Math.max(0, nowMs - Date.parse(report.createdAt));
-            const recencyWeight = Math.exp(-reportAgeMs / (45 * 60 * 1000));
-            weightedFullness += deriveFullnessValue(report) * recencyWeight;
-            totalWeight += recencyWeight;
+            if (reportAgeMs > 4 * 60 * 60 * 1000) {
+                continue;
+            }
+
+            const recencyWeight = Math.exp(-reportAgeMs / (35 * 60 * 1000));
+            const actionAdjustment = report.actionType === "parked" ? 0.45 : report.actionType === "leaving" ? -0.65 : 0;
+            const actionReliability = report.actionType === "observing" ? 1 : 0.92;
+            const adjustedFullness = clampNumber(deriveFullnessValue(report) + actionAdjustment, 1, 5);
+            const combinedWeight = recencyWeight * actionReliability;
+
+            weightedFullness += adjustedFullness * combinedWeight;
+            totalWeight += combinedWeight;
         }
 
-        const averageFullness = totalWeight > 0 ? weightedFullness / totalWeight : 3;
+        if (totalWeight <= 0) {
+            return "limited";
+        }
 
-        if (averageFullness <= 2.35) {
+        const averageFullness = weightedFullness / totalWeight;
+
+        if (averageFullness <= 2.25) {
             return "open";
         }
 
-        if (averageFullness <= 3.55) {
+        if (averageFullness <= 3.6) {
             return "limited";
         }
 
@@ -2028,13 +2041,20 @@ export default function ParkingMap() {
             void addBoundaryLayers();
         };
 
+        const handleMapStyleLoad = (): void => {
+            setAreBoundaryLayersReady(false);
+            void addBoundaryLayers();
+        };
+
         map.on("load", handleMapLoad);
+        map.on("style.load", handleMapStyleLoad);
 
         return () => {
             isActive = false;
             userLocationMarkerRef.current?.remove();
             userLocationMarkerRef.current = null;
             map.off("load", handleMapLoad);
+            map.off("style.load", handleMapStyleLoad);
             map.remove();
             mapRef.current = null;
             setAreBoundaryLayersReady(false);
