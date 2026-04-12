@@ -17,6 +17,11 @@ type ParkingStateRow = {
     parked_at: string;
 };
 
+type PurchaseFallbackResult = {
+    ok: boolean;
+    insufficientPoints?: boolean;
+};
+
 const parseBearerToken = (request: Request): string | null => {
     const authorizationHeader = request.headers.get("authorization");
 
@@ -59,6 +64,21 @@ const isPremiumActive = (premiumExpiresAt: string | null): boolean => {
     }
 
     return expiresMs > Date.now();
+};
+
+const isInsufficientPointsError = (message: string): boolean => {
+    const normalized = message.toLowerCase();
+    return normalized.includes("insufficient_points") || normalized.includes("not enough points");
+};
+
+const computeExtendedPremiumExpiryIso = (currentExpiry: string | null, months: number): string => {
+    const now = new Date();
+    const parsedCurrentMs = currentExpiry ? Date.parse(currentExpiry) : Number.NaN;
+    const baseDate = !Number.isNaN(parsedCurrentMs) && parsedCurrentMs > now.getTime() ? new Date(parsedCurrentMs) : now;
+    const nextDate = new Date(baseDate);
+
+    nextDate.setMonth(nextDate.getMonth() + months);
+    return nextDate.toISOString();
 };
 
 const ensureProfile = async (
@@ -107,6 +127,52 @@ const loadParkingState = async (
     }
 
     return data;
+};
+
+const purchasePremiumWithFallback = async (
+    supabase: ReturnType<typeof getSupabaseServerClient>,
+    userId: string,
+    requestedMonths: number,
+    premiumMonthCostPoints: number,
+): Promise<PurchaseFallbackResult> => {
+    const totalCost = requestedMonths * premiumMonthCostPoints;
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+        const profile = await loadProfile(supabase, userId);
+
+        if (!profile) {
+            return { ok: false };
+        }
+
+        const currentPoints = Number.isFinite(profile.points) ? Number(profile.points) : 0;
+
+        if (currentPoints < totalCost) {
+            return { ok: false, insufficientPoints: true };
+        }
+
+        const nextPremiumExpiryIso = computeExtendedPremiumExpiryIso(profile.premium_expires_at, requestedMonths);
+
+        const { data, error } = await supabase
+            .from("profiles")
+            .update({
+                points: currentPoints - totalCost,
+                premium_expires_at: nextPremiumExpiryIso,
+            })
+            .eq("id", userId)
+            .eq("points", currentPoints)
+            .select("id")
+            .maybeSingle<{ id: string }>();
+
+        if (error) {
+            throw error;
+        }
+
+        if (data?.id) {
+            return { ok: true };
+        }
+    }
+
+    return { ok: false };
 };
 
 const buildPremiumResponse = async (
@@ -233,6 +299,8 @@ export async function POST(request: Request) {
 
         const premiumMonthCostPoints = getPremiumMonthCostPoints();
 
+        let purchaseCompleted = false;
+
         const { error: purchaseError } = await supabase.rpc("purchase_premium_months", {
             p_user_id: user.id,
             p_months: requestedMonths,
@@ -243,10 +311,12 @@ export async function POST(request: Request) {
             p_month_cost_points: number;
         });
 
-        if (purchaseError) {
+        if (!purchaseError) {
+            purchaseCompleted = true;
+        } else {
             const message = purchaseError.message.toLowerCase();
 
-            if (message.includes("insufficient_points")) {
+            if (isInsufficientPointsError(message)) {
                 return NextResponse.json(
                     {
                         error: "Not enough points to buy premium.",
@@ -255,12 +325,36 @@ export async function POST(request: Request) {
                 );
             }
 
-            return NextResponse.json(
-                {
-                    error: "Unable to purchase premium right now.",
-                },
-                { status: 500 },
-            );
+            try {
+                const fallbackResult = await purchasePremiumWithFallback(
+                    supabase,
+                    user.id,
+                    requestedMonths,
+                    premiumMonthCostPoints,
+                );
+
+                if (fallbackResult.insufficientPoints) {
+                    return NextResponse.json(
+                        {
+                            error: "Not enough points to buy premium.",
+                        },
+                        { status: 409 },
+                    );
+                }
+
+                purchaseCompleted = fallbackResult.ok;
+            } catch {
+                purchaseCompleted = false;
+            }
+
+            if (!purchaseCompleted) {
+                return NextResponse.json(
+                    {
+                        error: "Unable to purchase premium right now. Run the Supabase repair SQL and retry.",
+                    },
+                    { status: 500 },
+                );
+            }
         }
 
         const responsePayload = await buildPremiumResponse(supabase, user.id, premiumMonthCostPoints);

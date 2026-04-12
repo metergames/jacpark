@@ -614,6 +614,7 @@ export default function ParkingMap() {
     const [isPanelDragging, setIsPanelDragging] = useState<boolean>(false);
     const [isPanelClosing, setIsPanelClosing] = useState<boolean>(false);
     const [isMapReady, setIsMapReady] = useState<boolean>(false);
+    const [areBoundaryLayersReady, setAreBoundaryLayersReady] = useState<boolean>(false);
     const [isRecenteringMap, setIsRecenteringMap] = useState<boolean>(false);
     const [isPointEditorEnabled, setIsPointEditorEnabled] = useState<boolean>(false);
     const [devPointActionType, setDevPointActionType] = useState<ReportActionType>("observing");
@@ -627,6 +628,7 @@ export default function ParkingMap() {
     const [premiumMonthCostPoints, setPremiumMonthCostPoints] = useState<number>(DEFAULT_PREMIUM_MONTH_COST_POINTS);
     const [parkedCarLocation, setParkedCarLocation] = useState<PremiumStatus["parkedCarLocation"]>(null);
     const [isFindingParkedCar, setIsFindingParkedCar] = useState<boolean>(false);
+    const [isInstalledDisplayMode, setIsInstalledDisplayMode] = useState<boolean>(false);
 
     const { isNearCampus, distanceToCampus, locationError, currentLocation } = useCampusProximity();
 
@@ -1003,6 +1005,21 @@ export default function ParkingMap() {
             void checkAndRequestNotificationPermission();
             notificationsInitializedRef.current = true;
         }
+    }, []);
+
+    useEffect(() => {
+        const hasStandaloneNavigatorFlag =
+            typeof navigator !== "undefined" &&
+            "standalone" in navigator &&
+            Boolean((navigator as Navigator & { standalone?: boolean }).standalone);
+
+        const installedDisplayMode =
+            window.matchMedia("(display-mode: standalone)").matches ||
+            window.matchMedia("(display-mode: fullscreen)").matches ||
+            window.matchMedia("(display-mode: minimal-ui)").matches ||
+            hasStandaloneNavigatorFlag;
+
+        setIsInstalledDisplayMode(installedDisplayMode);
     }, []);
 
     useEffect(() => {
@@ -1926,6 +1943,7 @@ export default function ParkingMap() {
 
         mapRef.current = map;
         mapLightPresetRef.current = initialLightPreset;
+        setAreBoundaryLayersReady(false);
 
         let isActive = true;
 
@@ -1994,9 +2012,11 @@ export default function ParkingMap() {
                     });
                 }
 
+                setAreBoundaryLayersReady(true);
                 setBoundaryLoadError("");
             } catch {
                 if (isActive) {
+                    setAreBoundaryLayersReady(false);
                     setBoundaryLoadError("Unable to load hardcoded boundary file.");
                 }
             }
@@ -2004,6 +2024,7 @@ export default function ParkingMap() {
 
         const handleMapLoad = (): void => {
             setIsMapReady(true);
+            setAreBoundaryLayersReady(false);
             void addBoundaryLayers();
         };
 
@@ -2016,6 +2037,7 @@ export default function ParkingMap() {
             map.off("load", handleMapLoad);
             map.remove();
             mapRef.current = null;
+            setAreBoundaryLayersReady(false);
         };
     }, []);
 
@@ -2116,7 +2138,7 @@ export default function ParkingMap() {
 
     // Manage heatmap layer
     useEffect(() => {
-        if (!isMapReady || !mapRef.current || !mapRef.current.isStyleLoaded()) {
+        if (!isMapReady || !areBoundaryLayersReady || !mapRef.current || !mapRef.current.isStyleLoaded()) {
             return;
         }
 
@@ -2199,7 +2221,7 @@ export default function ParkingMap() {
         if (map.getLayer(REPORTS_HEATMAP_POINTS_LAYER_ID)) {
             map.removeLayer(REPORTS_HEATMAP_POINTS_LAYER_ID);
         }
-    }, [heatmapData, isMapReady, isPremiumActive]);
+    }, [heatmapData, isMapReady, areBoundaryLayersReady, isPremiumActive]);
 
     useEffect(() => {
         if (!isMapReady || !mapRef.current || !mapRef.current.isStyleLoaded()) {
@@ -2222,7 +2244,7 @@ export default function ParkingMap() {
         if (map.getLayer(BOUNDARY_LINE_LAYER_ID)) {
             map.setPaintProperty(BOUNDARY_LINE_LAYER_ID, "line-color", nextLineColor);
         }
-    }, [isMapReady, isPremiumActive, zoneAvailability]);
+    }, [isMapReady, areBoundaryLayersReady, isPremiumActive, zoneAvailability]);
 
     return (
         <section className="relative h-[100dvh] w-screen overflow-hidden" style={{ overscrollBehaviorY: "contain" }}>
@@ -2336,6 +2358,18 @@ export default function ParkingMap() {
                                 aria-label="Open profile"
                             >
                                 <ProfileOutlineIcon />
+                            </button>
+                        ) : isInstalledDisplayMode ? (
+                            <button
+                                type="button"
+                                onClick={() => router.push("/login")}
+                                className="rounded-full border px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-white/12"
+                                style={{
+                                    borderColor: "rgba(255, 255, 255, 0.52)",
+                                    backgroundColor: "rgba(15, 23, 42, 0.34)",
+                                }}
+                            >
+                                Sign in
                             </button>
                         ) : (
                             <div className="text-xs text-gray-300">Sign in to report</div>
