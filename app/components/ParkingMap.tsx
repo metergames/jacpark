@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type TouchEvent } from "react";
 import { useRouter } from "next/navigation";
 import type { FeatureCollection, MultiPolygon, Polygon } from "geojson";
 import type { Session } from "@supabase/supabase-js";
@@ -62,7 +62,11 @@ const REPORTS_HEATMAP_SOURCE_ID = "parking-reports-heatmap";
 const REPORTS_HEATMAP_LAYER_ID = "parking-reports-heatmap-layer";
 const REPORTS_HEATMAP_POINTS_LAYER_ID = "parking-reports-points-layer";
 const LATEST_UPDATE_LIMIT = 1;
-const REPORTS_REFRESH_INTERVAL_MS = 90000;
+const FAST_REPORTS_REFRESH_INTERVAL_MS = 10000;
+const SLOW_REPORTS_REFRESH_INTERVAL_MS = 90000;
+const FAST_REFRESH_DISTANCE_METERS = 2000;
+const SWIPE_DISMISS_THRESHOLD_PX = 90;
+const USER_LOCATION_MARKER_CLASS_NAME = "jac-user-location-marker";
 const SUBMIT_RETRY_BASE_DELAY_MS = 400;
 const SUBMIT_RETRY_MAX_ATTEMPTS = 3;
 
@@ -378,8 +382,7 @@ const formatUpdateTime = (isoTime: string): string =>
         minute: "2-digit",
     });
 
-const getMapLightPreset = (): "day" | "night" =>
-    document.documentElement.classList.contains("dark") ? "night" : "day";
+const getMapLightPreset = (): "day" | "night" => (document.documentElement.classList.contains("dark") ? "night" : "day");
 
 const getSessionDisplayName = (session: Session | null): string => {
     if (!session?.user) {
@@ -407,7 +410,9 @@ export default function ParkingMap() {
     const { theme } = useTheme();
     const mapContainerRef = useRef<HTMLDivElement | null>(null);
     const mapRef = useRef<mapboxgl.Map | null>(null);
+    const userLocationMarkerRef = useRef<mapboxgl.Marker | null>(null);
     const mapLightPresetRef = useRef<"day" | "night">("day");
+    const latestCardTouchStartXRef = useRef<number | null>(null);
     const boundaryDataRef = useRef<BoundaryFeatureCollection | null>(null);
     const latestTransitionFrameRef = useRef<number | null>(null);
     const previousUpdateClearTimeoutRef = useRef<number | null>(null);
@@ -434,10 +439,24 @@ export default function ParkingMap() {
     const [previousReport, setPreviousReport] = useState<ParkingReport | null>(null);
     const [isPreviousReportFading, setIsPreviousReportFading] = useState<boolean>(false);
     const [isLatestReportEntering, setIsLatestReportEntering] = useState<boolean>(false);
+    const [dismissedLatestReportId, setDismissedLatestReportId] = useState<string | null>(null);
+    const [latestCardSwipeOffset, setLatestCardSwipeOffset] = useState<number>(0);
+    const [isLatestCardDragging, setIsLatestCardDragging] = useState<boolean>(false);
+    const [isMapReady, setIsMapReady] = useState<boolean>(false);
 
     const { isNearCampus, distanceToCampus, locationError, currentLocation } = useCampusProximity();
 
     const sessionDisplayName = useMemo(() => getSessionDisplayName(session), [session]);
+
+    const reportsRefreshIntervalMs = useMemo(() => {
+        if (!Number.isFinite(distanceToCampus)) {
+            return SLOW_REPORTS_REFRESH_INTERVAL_MS;
+        }
+
+        return distanceToCampus <= FAST_REFRESH_DISTANCE_METERS
+            ? FAST_REPORTS_REFRESH_INTERVAL_MS
+            : SLOW_REPORTS_REFRESH_INTERVAL_MS;
+    }, [distanceToCampus]);
 
     const isSelectedActionDisabled = useMemo(() => {
         if (!selectedAction) {
@@ -456,10 +475,7 @@ export default function ParkingMap() {
 
         // Filter reports: must have coordinates and not be optimistic
         const validReports = reports.filter(
-            (r) =>
-                !r.id.startsWith("optimistic-") &&
-                Number.isFinite(r.reporterLatitude) &&
-                Number.isFinite(r.reporterLongitude),
+            (r) => !r.id.startsWith("optimistic-") && Number.isFinite(r.reporterLatitude) && Number.isFinite(r.reporterLongitude),
         );
 
         if (validReports.length === 0) {
@@ -476,8 +492,7 @@ export default function ParkingMap() {
             const timeSinceReportMs = now - new Date(report.createdAt).getTime();
             const decayFactor = Math.max(0.1, 1 - timeSinceReportMs / DECAY_MS);
 
-            const intensityWeight =
-                report.availability === "full" ? 1.0 : report.availability === "limited" ? 0.6 : 0.3;
+            const intensityWeight = report.availability === "full" ? 1.0 : report.availability === "limited" ? 0.6 : 0.3;
 
             return {
                 longitude: report.reporterLongitude,
@@ -819,7 +834,7 @@ export default function ParkingMap() {
         void loadReports(false);
         const refreshInterval = window.setInterval(() => {
             void refreshIfVisible();
-        }, REPORTS_REFRESH_INTERVAL_MS);
+        }, reportsRefreshIntervalMs);
 
         document.addEventListener("visibilitychange", refreshIfVisible);
         window.addEventListener("focus", refreshIfVisible);
@@ -830,7 +845,7 @@ export default function ParkingMap() {
             document.removeEventListener("visibilitychange", refreshIfVisible);
             window.removeEventListener("focus", refreshIfVisible);
         };
-    }, [session?.access_token]);
+    }, [session?.access_token, reportsRefreshIntervalMs]);
 
     useEffect(() => {
         const newestReport = reports[0] ?? null;
@@ -878,6 +893,61 @@ export default function ParkingMap() {
             previousUpdateClearTimeoutRef.current = null;
         }, 450);
     }, [reports, latestReport]);
+
+    useEffect(() => {
+        setLatestCardSwipeOffset(0);
+        setIsLatestCardDragging(false);
+        latestCardTouchStartXRef.current = null;
+
+        if (!latestReport) {
+            return;
+        }
+
+        setDismissedLatestReportId((currentDismissedId) => (currentDismissedId === latestReport.id ? currentDismissedId : null));
+    }, [latestReport]);
+
+    const visibleLatestReport = useMemo(() => {
+        if (!latestReport || latestReport.id === dismissedLatestReportId) {
+            return null;
+        }
+
+        return latestReport;
+    }, [latestReport, dismissedLatestReportId]);
+
+    const handleLatestReportTouchStart = (event: TouchEvent<HTMLDivElement>): void => {
+        if (!visibleLatestReport) {
+            return;
+        }
+
+        latestCardTouchStartXRef.current = event.touches[0]?.clientX ?? null;
+        setIsLatestCardDragging(true);
+    };
+
+    const handleLatestReportTouchMove = (event: TouchEvent<HTMLDivElement>): void => {
+        if (latestCardTouchStartXRef.current === null) {
+            return;
+        }
+
+        const currentX = event.touches[0]?.clientX;
+
+        if (typeof currentX !== "number") {
+            return;
+        }
+
+        const swipeDistance = currentX - latestCardTouchStartXRef.current;
+        setLatestCardSwipeOffset(Math.max(0, swipeDistance));
+    };
+
+    const handleLatestReportTouchEnd = (): void => {
+        setIsLatestCardDragging(false);
+
+        if (latestCardSwipeOffset >= SWIPE_DISMISS_THRESHOLD_PX && visibleLatestReport) {
+            setDismissedLatestReportId(visibleLatestReport.id);
+        }
+
+        setLatestCardSwipeOffset(0);
+        latestCardTouchStartXRef.current = null;
+    };
 
     useEffect(() => {
         if (!mapContainerRef.current || mapRef.current) {
@@ -989,6 +1059,7 @@ export default function ParkingMap() {
         };
 
         const handleMapLoad = (): void => {
+            setIsMapReady(true);
             void addBoundaryLayers();
         };
 
@@ -996,6 +1067,8 @@ export default function ParkingMap() {
 
         return () => {
             isActive = false;
+            userLocationMarkerRef.current?.remove();
+            userLocationMarkerRef.current = null;
             map.off("load", handleMapLoad);
             map.remove();
             mapRef.current = null;
@@ -1032,9 +1105,39 @@ export default function ParkingMap() {
         };
     }, [theme]);
 
+    useEffect(() => {
+        if (!isMapReady || !mapRef.current) {
+            return;
+        }
+
+        if (!currentLocation) {
+            userLocationMarkerRef.current?.remove();
+            userLocationMarkerRef.current = null;
+            return;
+        }
+
+        const markerPosition: LngLatTuple = [currentLocation.longitude, currentLocation.latitude];
+
+        if (!userLocationMarkerRef.current) {
+            const markerElement = document.createElement("div");
+            markerElement.className = USER_LOCATION_MARKER_CLASS_NAME;
+
+            userLocationMarkerRef.current = new mapboxgl.Marker({
+                element: markerElement,
+                anchor: "center",
+            })
+                .setLngLat(markerPosition)
+                .addTo(mapRef.current);
+
+            return;
+        }
+
+        userLocationMarkerRef.current.setLngLat(markerPosition);
+    }, [currentLocation, isMapReady]);
+
     // Manage heatmap layer
     useEffect(() => {
-        if (!mapRef.current || !mapRef.current.isStyleLoaded()) {
+        if (!isMapReady || !mapRef.current || !mapRef.current.isStyleLoaded()) {
             return;
         }
 
@@ -1101,7 +1204,7 @@ export default function ParkingMap() {
                 REPORTS_HEATMAP_LAYER_ID,
             );
         }
-    }, [heatmapData]);
+    }, [heatmapData, isMapReady]);
 
     return (
         <section className="relative h-[100dvh] w-screen overflow-hidden">
@@ -1109,11 +1212,12 @@ export default function ParkingMap() {
             <div ref={mapContainerRef} className="h-full w-full" />
 
             {/* Top bar: minimal info */}
-            <div className="absolute top-0 left-0 right-0 z-10 px-4 py-3 sm:py-4 flex items-center justify-between" style={{ backgroundColor: "rgba(0,0,0,0.3)", backdropFilter: "blur(8px)" }}>
+            <div
+                className="absolute top-0 left-0 right-0 z-10 px-4 py-3 sm:py-4 flex items-center justify-between"
+                style={{ backgroundColor: "rgba(0,0,0,0.3)", backdropFilter: "blur(8px)" }}
+            >
                 <div className="flex items-center gap-2">
-                    <div className="text-sm sm:text-base font-semibold text-white">
-                        {formatDistance(distanceToCampus)}
-                    </div>
+                    <div className="text-sm sm:text-base font-semibold text-white">{formatDistance(distanceToCampus)}</div>
                     <div className={`text-xs sm:text-sm font-medium ${isNearCampus ? "text-green-400" : "text-amber-400"}`}>
                         {isNearCampus ? "✓ Ready" : "Move closer"}
                     </div>
@@ -1138,12 +1242,15 @@ export default function ParkingMap() {
             {/* Bottom sheet: report form (only show when action selected) */}
             {selectedAction && (
                 <div className="fixed bottom-0 left-0 right-0 z-20 pt-3" style={{ animation: "slideUp 0.3s ease-out" }}>
-                    <div className="rounded-t-3xl shadow-2xl p-4 sm:p-6 max-h-[80dvh] overflow-auto" style={{
-                        backgroundColor: "var(--surface)",
-                        borderColor: "var(--line)",
-                        borderWidth: "1px",
-                        borderBottomWidth: "0px",
-                    }}>
+                    <div
+                        className="rounded-t-3xl shadow-2xl p-4 sm:p-6 max-h-[80dvh] overflow-auto"
+                        style={{
+                            backgroundColor: "var(--surface)",
+                            borderColor: "var(--line)",
+                            borderWidth: "1px",
+                            borderBottomWidth: "0px",
+                        }}
+                    >
                         {/* Handle bar */}
                         <div className="flex justify-center mb-2">
                             <div className="w-12 h-1 rounded-full" style={{ backgroundColor: "var(--line)" }}></div>
@@ -1151,9 +1258,7 @@ export default function ParkingMap() {
 
                         {/* Form header */}
                         <div className="flex items-center justify-between mb-4">
-                            <h3 className="text-lg font-semibold">
-                                {REPORT_ACTION_CONFIG[selectedAction].label}
-                            </h3>
+                            <h3 className="text-lg font-semibold">{REPORT_ACTION_CONFIG[selectedAction].label}</h3>
                             <button
                                 onClick={() => setSelectedAction(null)}
                                 className="text-2xl"
@@ -1171,7 +1276,12 @@ export default function ParkingMap() {
                         {/* Fullness selector */}
                         <form onSubmit={handleReportSubmit} className="space-y-4">
                             <div>
-                                <label className="text-xs font-semibold uppercase tracking-[0.14em]" style={{ color: "var(--muted)" }}>Fullness Level</label>
+                                <label
+                                    className="text-xs font-semibold uppercase tracking-[0.14em]"
+                                    style={{ color: "var(--muted)" }}
+                                >
+                                    Fullness Level
+                                </label>
                                 <div className="mt-3 grid grid-cols-5 gap-2">
                                     {[1, 2, 3, 4, 5].map((level) => {
                                         const isSelected = fullnessLevel === level;
@@ -1203,7 +1313,10 @@ export default function ParkingMap() {
                             </div>
 
                             {reportFeedback && (
-                                <p className="text-xs font-medium" style={{ color: reportFeedback.includes("saved") ? "var(--foreground)" : "#ef4444" }}>
+                                <p
+                                    className="text-xs font-medium"
+                                    style={{ color: reportFeedback.includes("saved") ? "var(--foreground)" : "#ef4444" }}
+                                >
                                     {reportFeedback}
                                 </p>
                             )}
@@ -1227,12 +1340,14 @@ export default function ParkingMap() {
                         <>
                             {(Object.keys(REPORT_ACTION_CONFIG) as ReportActionType[]).map((actionType) => {
                                 const isDisabled = isActionDisabledForParkState(actionType, isUserParkedToday);
-                                
+
                                 let bgColor = "#22c55e"; // default green
-                                if (actionType === "parked") bgColor = "#22c55e"; // green for parked
-                                else if (actionType === "leaving") bgColor = "#f97316"; // orange for leaving
+                                if (actionType === "parked")
+                                    bgColor = "#22c55e"; // green for parked
+                                else if (actionType === "leaving")
+                                    bgColor = "#f97316"; // orange for leaving
                                 else if (actionType === "observing") bgColor = "#0ea5e9"; // blue for observing
-                                
+
                                 return (
                                     <button
                                         key={actionType}
@@ -1249,8 +1364,12 @@ export default function ParkingMap() {
                                         }}
                                         title={REPORT_ACTION_CONFIG[actionType].label}
                                     >
-                                        <span className="text-2xl sm:text-2xl flex-shrink-0"><ActionIcon actionType={actionType} /></span>
-                                        <span className="text-xs sm:text-sm font-bold leading-tight">{REPORT_ACTION_CONFIG[actionType].label}</span>
+                                        <span className="text-2xl sm:text-2xl flex-shrink-0">
+                                            <ActionIcon actionType={actionType} />
+                                        </span>
+                                        <span className="text-xs sm:text-sm font-bold leading-tight">
+                                            {REPORT_ACTION_CONFIG[actionType].label}
+                                        </span>
                                     </button>
                                 );
                             })}
@@ -1259,35 +1378,57 @@ export default function ParkingMap() {
                 </div>
             ) : null}
 
-            {/* Latest update card - bottom left */}
-            {isAuthReady && (
-                <div className="absolute bottom-4 sm:bottom-6 left-4 sm:left-6 z-10 max-w-xs" style={{ pointerEvents: "none" }}>
-                    {latestReport ? (
-                        <div className="rounded-2xl shadow-lg p-3 sm:p-4" style={{
+            {/* Latest update card - top, swipe right to dismiss */}
+            {isAuthReady && visibleLatestReport ? (
+                <div className="absolute left-0 right-0 top-16 z-20 px-3 sm:top-20 sm:px-4">
+                    <div
+                        className="mx-auto w-full max-w-sm rounded-2xl border p-3 shadow-lg sm:p-4"
+                        style={{
                             backgroundColor: "var(--surface)",
                             borderColor: "var(--line)",
-                            borderWidth: "1px",
-                        }}>
-                            <p className="text-xs sm:text-sm font-semibold" style={{ color: "var(--foreground)" }}>
-                                {formatPublicUpdateText(latestReport.actionType)}
-                            </p>
-                            <div className="flex items-center gap-2 mt-1">
-                                <span className="text-xs" style={{ color: "var(--muted)" }}>
-                                    {formatUpdateTime(latestReport.createdAt)}
-                                </span>
-                                <span className="text-xs font-semibold">
-                                    {FULLNESS_DESCRIPTIONS[latestReport.fullnessLevel ?? 3]}
-                                </span>
+                            transform: `translateX(${latestCardSwipeOffset}px)`,
+                            opacity: Math.max(0.32, 1 - latestCardSwipeOffset / 180),
+                            transition: isLatestCardDragging ? "none" : "transform 0.16s ease, opacity 0.16s ease",
+                            touchAction: "pan-y",
+                        }}
+                        onTouchStart={handleLatestReportTouchStart}
+                        onTouchMove={handleLatestReportTouchMove}
+                        onTouchEnd={handleLatestReportTouchEnd}
+                        onTouchCancel={handleLatestReportTouchEnd}
+                    >
+                        <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                                <p className="text-xs font-semibold sm:text-sm" style={{ color: "var(--foreground)" }}>
+                                    {formatPublicUpdateText(visibleLatestReport.actionType)}
+                                </p>
+                                <div className="mt-1 flex items-center gap-2">
+                                    <span className="text-xs" style={{ color: "var(--muted)" }}>
+                                        {formatUpdateTime(visibleLatestReport.createdAt)}
+                                    </span>
+                                    <span className="text-xs font-semibold">
+                                        {FULLNESS_DESCRIPTIONS[visibleLatestReport.fullnessLevel ?? 3]}
+                                    </span>
+                                </div>
                             </div>
-                            <p className="text-xs mt-1" style={{ color: "var(--muted)" }}>
-                                🔥 {heatmapData.features.length} hotspots
-                            </p>
+
+                            <button
+                                type="button"
+                                onClick={() => setDismissedLatestReportId(visibleLatestReport.id)}
+                                className="rounded-full px-2 py-1 text-xs font-semibold"
+                                style={{ color: "var(--muted)", backgroundColor: "var(--surface-strong)" }}
+                                aria-label="Dismiss latest update"
+                            >
+                                ✕
+                            </button>
                         </div>
-                    ) : (
-                        <div className="text-xs text-gray-400">No reports yet</div>
-                    )}
+
+                        <div className="mt-2 flex items-center justify-between text-[11px]" style={{ color: "var(--muted)" }}>
+                            <span>Swipe right to dismiss</span>
+                            <span>🔥 {heatmapData.features.length} hotspots</span>
+                        </div>
+                    </div>
                 </div>
-            )}
+            ) : null}
 
             {/* Modals */}
             {showDashboard && (
@@ -1313,6 +1454,27 @@ export default function ParkingMap() {
                     to {
                         transform: translateY(0);
                     }
+                }
+
+                @keyframes jac-user-location-pulse {
+                    0% {
+                        box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.5);
+                    }
+                    70% {
+                        box-shadow: 0 0 0 14px rgba(37, 99, 235, 0);
+                    }
+                    100% {
+                        box-shadow: 0 0 0 0 rgba(37, 99, 235, 0);
+                    }
+                }
+
+                :global(.jac-user-location-marker) {
+                    width: 18px;
+                    height: 18px;
+                    border-radius: 999px;
+                    border: 2px solid #ffffff;
+                    background: #2563eb;
+                    animation: jac-user-location-pulse 1.6s ease-out infinite;
                 }
             `}</style>
         </section>
