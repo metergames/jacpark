@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { getSupabaseBrowserClient } from "../lib/supabase";
 import { useTheme } from "../lib/ThemeContext";
 import type { Session } from "@supabase/supabase-js";
-
+//YES
 export default function SettingsPage() {
     const router = useRouter();
     const { theme, setTheme } = useTheme();
