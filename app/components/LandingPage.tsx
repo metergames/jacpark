@@ -4,11 +4,34 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { getSupabaseBrowserClient } from "../lib/supabase";
 
+type BeforeInstallPromptEvent = Event & {
+    prompt: () => Promise<void>;
+    userChoice: Promise<{
+        outcome: "accepted" | "dismissed";
+        platform: string;
+    }>;
+};
+
+const isStandaloneAppDisplayMode = (): boolean => {
+    if (typeof window === "undefined") {
+        return false;
+    }
+
+    const isStandaloneMedia = window.matchMedia("(display-mode: standalone)").matches;
+    const isIosStandalone = (navigator as Navigator & { standalone?: boolean }).standalone === true;
+    const isAndroidTwa = document.referrer.startsWith("android-app://");
+
+    return isStandaloneMedia || isIosStandalone || isAndroidTwa;
+};
+
 export default function LandingPage() {
     const router = useRouter();
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState("");
     const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+    const [installError, setInstallError] = useState("");
+    const [canInstallPwa, setCanInstallPwa] = useState(false);
+    const [deferredInstallPrompt, setDeferredInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
 
     useEffect(() => {
         // Check if user is already authenticated
@@ -32,6 +55,58 @@ export default function LandingPage() {
         checkExistingSession();
     }, [router]);
 
+    useEffect(() => {
+        if (typeof window === "undefined") {
+            return;
+        }
+
+        if (isStandaloneAppDisplayMode()) {
+            setCanInstallPwa(false);
+            setDeferredInstallPrompt(null);
+            return;
+        }
+
+        const handleBeforeInstallPrompt = (event: Event) => {
+            event.preventDefault();
+            setDeferredInstallPrompt(event as BeforeInstallPromptEvent);
+            setCanInstallPwa(true);
+        };
+
+        const handleInstalled = () => {
+            setCanInstallPwa(false);
+            setDeferredInstallPrompt(null);
+            setInstallError("");
+        };
+
+        const displayModeQuery = window.matchMedia("(display-mode: standalone)");
+        const handleDisplayModeChange = () => {
+            if (isStandaloneAppDisplayMode()) {
+                setCanInstallPwa(false);
+                setDeferredInstallPrompt(null);
+            }
+        };
+
+        const supportsModernQueryListener = typeof displayModeQuery.addEventListener === "function";
+
+        window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+        window.addEventListener("appinstalled", handleInstalled);
+        if (supportsModernQueryListener) {
+            displayModeQuery.addEventListener("change", handleDisplayModeChange);
+        } else {
+            displayModeQuery.addListener(handleDisplayModeChange);
+        }
+
+        return () => {
+            window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+            window.removeEventListener("appinstalled", handleInstalled);
+            if (supportsModernQueryListener) {
+                displayModeQuery.removeEventListener("change", handleDisplayModeChange);
+            } else {
+                displayModeQuery.removeListener(handleDisplayModeChange);
+            }
+        };
+    }, []);
+
     const handleGoogleSignIn = async () => {
         setError("");
         setIsLoading(true);
@@ -49,6 +124,24 @@ export default function LandingPage() {
             setError("Failed to sign in with Google. Supabase may not be configured.");
         } finally {
             setIsLoading(false);
+        }
+    };
+
+    const handleInstallPwa = async () => {
+        if (!deferredInstallPrompt) {
+            return;
+        }
+
+        setInstallError("");
+
+        try {
+            await deferredInstallPrompt.prompt();
+            await deferredInstallPrompt.userChoice;
+        } catch {
+            setInstallError("Unable to open install prompt right now.");
+        } finally {
+            setCanInstallPwa(false);
+            setDeferredInstallPrompt(null);
         }
     };
 
@@ -99,6 +192,17 @@ export default function LandingPage() {
                             </svg>
                             {isLoading ? "Signing in..." : "Continue with Google"}
                         </button>
+
+                        {canInstallPwa && (
+                            <button
+                                onClick={handleInstallPwa}
+                                className="mt-3 w-full rounded-lg border border-[#5ce786]/60 bg-transparent px-4 py-3 font-semibold text-[#5ce786] transition hover:border-[#9bfea8] hover:text-[#9bfea8]"
+                            >
+                                Install Omnilots App
+                            </button>
+                        )}
+
+                        {installError && <p className="mt-3 text-center text-sm text-red-500">{installError}</p>}
 
                         {/* Footer */}
                         <p className="text-center text-xs text-gray-500 mt-8">
