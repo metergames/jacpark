@@ -62,15 +62,10 @@ const BOUNDARY_GEOJSON_PATH = "/boundaries/jac-parking-boundaries.geojson";
 const REPORTS_HEATMAP_SOURCE_ID = "parking-reports-heatmap";
 const REPORTS_HEATMAP_LAYER_ID = "parking-reports-heatmap-layer";
 const REPORTS_HEATMAP_POINTS_LAYER_ID = "parking-reports-points-layer";
-const HOTSPOT_SHAPE_SOURCE_ID = "parking-hotspot-shapes";
-const HOTSPOT_SHAPE_FILL_LAYER_ID = "parking-hotspot-shapes-fill";
-const HOTSPOT_SHAPE_LINE_LAYER_ID = "parking-hotspot-shapes-line";
 const HEATMAP_REPORTS_LIMIT = 120;
 const HEATMAP_PRIVACY_CELL_METERS = 44;
 const HEATMAP_CELL_CENTER_BLEND = 0.22;
 const HEATMAP_MERGE_DISTANCE_MULTIPLIER = 1.35;
-const HOTSPOT_BASE_RADIUS_METERS = 20;
-const HOTSPOT_RADIUS_WEIGHT_SCALE_METERS = 26;
 const HEATMAP_MAX_REPORT_AGE_MS = 3 * 60 * 60 * 1000;
 const HEATMAP_BASE_HALFLIFE_MS = 50 * 60 * 1000;
 const HEATMAP_RECENT_WINDOW_MS = 12 * 60 * 1000;
@@ -407,33 +402,6 @@ const getActionSignal = (report: ParkingReport): number => {
 };
 
 const getPrivacyCellMeters = (): number => HEATMAP_PRIVACY_CELL_METERS;
-
-const offsetLatLng = (center: LatLng, northMeters: number, eastMeters: number): LatLng => {
-    const latitude = center.latitude + northMeters / 111320;
-    const cosLat = Math.max(0.35, Math.cos((center.latitude * Math.PI) / 180));
-    const longitude = center.longitude + eastMeters / (111320 * cosLat);
-
-    return {
-        latitude,
-        longitude,
-    };
-};
-
-const buildRegularPolygonRing = (center: LatLng, radiusMeters: number, sides: number): LngLatTuple[] => {
-    const safeSides = Math.max(4, Math.round(sides));
-    const ring: LngLatTuple[] = [];
-
-    for (let side = 0; side < safeSides; side += 1) {
-        const angle = ((Math.PI * 2) / safeSides) * side - Math.PI / 2;
-        const eastMeters = Math.cos(angle) * radiusMeters;
-        const northMeters = Math.sin(angle) * radiusMeters;
-        const point = offsetLatLng(center, northMeters, eastMeters);
-        ring.push([point.longitude, point.latitude]);
-    }
-
-    ring.push(ring[0]);
-    return ring;
-};
 
 const formatAvailabilityLabel = (availability: ParkingAvailability): string => {
     if (availability === "open") {
@@ -890,48 +858,6 @@ export default function ParkingMap() {
             void subscribeToPushNotifications(session.access_token);
         }
     }, [session?.access_token]);
-
-
-    const hotspotShapeData = useMemo(() => {
-        return {
-            type: "FeatureCollection" as const,
-            features: heatmapData.features.map((feature) => {
-                const [longitude, latitude] = feature.geometry.coordinates;
-                const weight =
-                    typeof feature.properties?.weight === "number" && Number.isFinite(feature.properties.weight)
-                        ? feature.properties.weight
-                        : 0.5;
-                const confidence =
-                    typeof feature.properties?.confidence === "number" && Number.isFinite(feature.properties.confidence)
-                        ? feature.properties.confidence
-                        : 0.4;
-                const pressure =
-                    typeof feature.properties?.pressure === "number" && Number.isFinite(feature.properties.pressure)
-                        ? feature.properties.pressure
-                        : 0;
-                const center = { latitude, longitude };
-                const radiusMeters =
-                    HOTSPOT_BASE_RADIUS_METERS + clampNumber(weight, 0, 3.4) * HOTSPOT_RADIUS_WEIGHT_SCALE_METERS;
-                const shapeBias = clampNumber((pressure + 1) / 2, 0, 1) * 0.7 + clampNumber(confidence, 0, 1) * 0.3;
-                const polygonSides = Math.round(4 + shapeBias * 4);
-
-                return {
-                    type: "Feature" as const,
-                    geometry: {
-                        type: "Polygon" as const,
-                        coordinates: [buildRegularPolygonRing(center, radiusMeters, polygonSides)],
-                    },
-                    properties: {
-                        ...feature.properties,
-                        weight,
-                        confidence,
-                        pressure,
-                        polygonSides,
-                    },
-                };
-            }),
-        };
-    }, [heatmapData]);
 
     useEffect(() => {
         return () => {
@@ -1398,7 +1324,6 @@ export default function ParkingMap() {
                     }
                     previousReportCountRef.current = newReports.length;
 
-
                     if (session?.access_token) {
                         setIsUserParkedToday(Boolean(payload.viewerParkingState?.isParkedToday));
                     } else {
@@ -1848,19 +1773,19 @@ export default function ParkingMap() {
         handleAddDevPointAt,
     ]);
 
-    // Manage hotspot shape layers
+    // Manage heatmap layer
     useEffect(() => {
         if (!isMapReady || !mapRef.current || !mapRef.current.isStyleLoaded()) {
             return;
         }
 
         const map = mapRef.current;
-        const data = hotspotShapeData;
+        const data = heatmapData;
 
         // Ensure source exists
-        const existingSource = map.getSource(HOTSPOT_SHAPE_SOURCE_ID) as mapboxgl.GeoJSONSource | undefined;
+        const existingSource = map.getSource(REPORTS_HEATMAP_SOURCE_ID) as mapboxgl.GeoJSONSource | undefined;
         if (!existingSource) {
-            map.addSource(HOTSPOT_SHAPE_SOURCE_ID, {
+            map.addSource(REPORTS_HEATMAP_SOURCE_ID, {
                 type: "geojson",
                 data,
             });
@@ -1870,97 +1795,53 @@ export default function ParkingMap() {
 
         const boundaryFillLayerExists = Boolean(map.getLayer(BOUNDARY_FILL_LAYER_ID));
 
-        // Add hotspot fill layer if it doesn't exist
-        if (!map.getLayer(HOTSPOT_SHAPE_FILL_LAYER_ID)) {
-            const hotspotFillLayer: mapboxgl.FillLayer = {
-                id: HOTSPOT_SHAPE_FILL_LAYER_ID,
-                type: "fill",
-                source: HOTSPOT_SHAPE_SOURCE_ID,
+        // Add heatmap layer if it doesn't exist
+        if (!map.getLayer(REPORTS_HEATMAP_LAYER_ID)) {
+            const heatmapLayer: mapboxgl.HeatmapLayer = {
+                id: REPORTS_HEATMAP_LAYER_ID,
+                type: "heatmap",
+                source: REPORTS_HEATMAP_SOURCE_ID,
                 paint: {
-                    "fill-color": [
-                        "interpolate",
-                        ["linear"],
-                        ["coalesce", ["get", "weight"], 0],
-                        0,
-                        "#38bdf8",
-                        0.45,
-                        "#22d3ee",
-                        1,
-                        "#facc15",
-                        1.85,
-                        "#f97316",
-                        2.7,
-                        "#be123c",
-                        3.4,
-                        "#7f1d1d",
-                    ],
-                    "fill-opacity": [
+                    "heatmap-weight": [
                         "*",
-                        ["interpolate", ["linear"], ["coalesce", ["get", "confidence"], 0.4], 0, 0.28, 1, 0.78],
-                        ["interpolate", ["linear"], ["coalesce", ["get", "weight"], 0], 0, 0.42, 3.4, 0.74],
+                        ["coalesce", ["get", "weight"], 0],
+                        ["interpolate", ["linear"], ["coalesce", ["get", "confidence"], 0.4], 0, 0.25, 1, 1],
                     ],
-                },
-            };
-
-            if (boundaryFillLayerExists) {
-                map.addLayer(hotspotFillLayer, BOUNDARY_FILL_LAYER_ID);
-            } else {
-                map.addLayer(hotspotFillLayer);
-            }
-        } else if (boundaryFillLayerExists) {
-            map.moveLayer(HOTSPOT_SHAPE_FILL_LAYER_ID, BOUNDARY_FILL_LAYER_ID);
-        }
-
-        if (!map.getLayer(HOTSPOT_SHAPE_LINE_LAYER_ID)) {
-            const hotspotLineLayer: mapboxgl.LineLayer = {
-                id: HOTSPOT_SHAPE_LINE_LAYER_ID,
-                type: "line",
-                source: HOTSPOT_SHAPE_SOURCE_ID,
-                paint: {
-                    "line-color": [
+                    "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 9, 0.9, 12, 1.2, 15, 1.45, 18, 1.75],
+                    "heatmap-color": [
                         "interpolate",
                         ["linear"],
-                        ["coalesce", ["get", "pressure"], 0],
-                        -1,
-                        "#0ea5e9",
-                        -0.25,
-                        "#22d3ee",
-                        0.25,
-                        "#facc15",
-                        0.7,
-                        "#f97316",
-                        0.9,
-                        "#be123c",
+                        ["heatmap-density"],
+                        0,
+                        "rgba(81, 187, 214, 0)",
+                        0.15,
+                        "#51bbd6",
+                        0.35,
+                        "#f1f075",
+                        0.6,
+                        "#f28b36",
                         1,
-                        "#7f1d1d",
+                        "#b41135",
                     ],
-                    "line-width": ["interpolate", ["linear"], ["zoom"], 10, 0.8, 14, 1.3, 17, 1.9, 20, 2.5],
-                    "line-opacity": ["interpolate", ["linear"], ["coalesce", ["get", "confidence"], 0.4], 0, 0.35, 1, 0.85],
+                    "heatmap-radius": ["interpolate", ["exponential", 1.35], ["zoom"], 9, 10, 12, 20, 15, 38, 18, 70, 20, 100],
+                    "heatmap-opacity": ["interpolate", ["linear"], ["zoom"], 9, 0.72, 13, 0.84, 17, 0.9, 20, 0.8],
                 },
             };
 
             if (boundaryFillLayerExists) {
-                map.addLayer(hotspotLineLayer, BOUNDARY_FILL_LAYER_ID);
+                map.addLayer(heatmapLayer, BOUNDARY_FILL_LAYER_ID);
             } else {
-                map.addLayer(hotspotLineLayer);
+                map.addLayer(heatmapLayer);
             }
         } else if (boundaryFillLayerExists) {
-            map.moveLayer(HOTSPOT_SHAPE_LINE_LAYER_ID, BOUNDARY_FILL_LAYER_ID);
+            map.moveLayer(REPORTS_HEATMAP_LAYER_ID, BOUNDARY_FILL_LAYER_ID);
         }
 
         // Remove explicit point rendering to avoid exposing precise reported positions.
         if (map.getLayer(REPORTS_HEATMAP_POINTS_LAYER_ID)) {
             map.removeLayer(REPORTS_HEATMAP_POINTS_LAYER_ID);
         }
-
-        if (map.getLayer(REPORTS_HEATMAP_LAYER_ID)) {
-            map.removeLayer(REPORTS_HEATMAP_LAYER_ID);
-        }
-
-        if (map.getSource(REPORTS_HEATMAP_SOURCE_ID) && !map.getLayer(REPORTS_HEATMAP_LAYER_ID)) {
-            map.removeSource(REPORTS_HEATMAP_SOURCE_ID);
-        }
-    }, [hotspotShapeData, isMapReady]);
+    }, [heatmapData, isMapReady]);
 
     return (
         <section className="relative h-[100dvh] w-screen overflow-hidden" style={{ overscrollBehaviorY: "contain" }}>
