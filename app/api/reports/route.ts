@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { CAMPUS_RADIUS_METERS, haversineDistanceMeters, JOHN_ABBOTT_CENTER, type LatLng } from "../../lib/geo";
 import { getSupabaseServerClient } from "../../lib/supabaseServer";
+import { sendPushNotificationToAll } from "../../lib/webPushServer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -448,6 +449,12 @@ export async function POST(request: Request) {
         }
 
         const report = toApiReport(data as ParkingReportRow);
+
+        void sendPushNotificationToAll({
+            title: "Omnilots",
+            body: `New ${actionType} update was posted for parking conditions.`,
+            tag: "omnilots-report-update",
+        });
 
         return NextResponse.json({ report }, { status: 201 });
     } catch {

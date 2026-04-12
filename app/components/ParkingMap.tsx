@@ -9,7 +9,7 @@ import useCampusProximity from "../hooks/useCampusProximity";
 import { CAMPUS_RADIUS_METERS, haversineDistanceMeters, type LatLng } from "../lib/geo";
 import { getSupabaseBrowserClient } from "../lib/supabaseBrowser";
 import { useTheme } from "../lib/ThemeContext";
-import { checkAndRequestNotificationPermission, showNotification } from "../lib/notifications";
+import { checkAndRequestNotificationPermission, showNotification, subscribeToPushNotifications } from "../lib/notifications";
 import UserDashboard from "./UserDashboard";
 import SettingsModal from "./SettingsModal";
 import LeaderboardModal from "./LeaderboardModal";
@@ -848,6 +848,16 @@ export default function ParkingMap() {
             notificationsInitializedRef.current = true;
         }
     }, []);
+
+    useEffect(() => {
+        if (!session?.access_token) {
+            return;
+        }
+
+        if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+            void subscribeToPushNotifications(session.access_token);
+        }
+    }, [session?.access_token]);
 
 
     useEffect(() => {
