@@ -9,6 +9,7 @@ import useCampusProximity from "../hooks/useCampusProximity";
 import { CAMPUS_RADIUS_METERS, haversineDistanceMeters, type LatLng } from "../lib/geo";
 import { getSupabaseBrowserClient } from "../lib/supabaseBrowser";
 import { useTheme } from "../lib/ThemeContext";
+import { checkAndRequestNotificationPermission, showNotification } from "../lib/notifications";
 import UserDashboard from "./UserDashboard";
 import SettingsModal from "./SettingsModal";
 import LeaderboardModal from "./LeaderboardModal";
@@ -479,6 +480,8 @@ export default function ParkingMap() {
     const boundaryDataRef = useRef<BoundaryFeatureCollection | null>(null);
     const latestTransitionFrameRef = useRef<number | null>(null);
     const previousUpdateClearTimeoutRef = useRef<number | null>(null);
+    const previousReportCountRef = useRef<number>(0);
+    const notificationsInitializedRef = useRef<boolean>(false);
 
     const [session, setSession] = useState<Session | null>(null);
     const [isAuthReady, setIsAuthReady] = useState<boolean>(false);
@@ -833,6 +836,14 @@ export default function ParkingMap() {
             })),
         };
     }, [reports]);
+    // Initialize notifications on mount
+    useEffect(() => {
+        if (!notificationsInitializedRef.current) {
+            void checkAndRequestNotificationPermission();
+            notificationsInitializedRef.current = true;
+        }
+    }, []);
+
 
     useEffect(() => {
         return () => {
@@ -1087,6 +1098,16 @@ export default function ParkingMap() {
                 ),
             );
 
+            // Show notification for successful parking update
+            const actionMessages: Record<ReportActionType, string> = {
+                parked: "You've marked your location as parked",
+                leaving: "You've marked your location as leaving",
+                observing: "You've shared a parking observation",
+            };
+            void showNotification({
+                title: "Update Recorded",
+                body: actionMessages[actionToSubmit],
+            });
             setReportFeedback("Report saved.");
         } catch {
             setReports(previousReportsSnapshot);
@@ -1144,6 +1165,17 @@ export default function ParkingMap() {
                 if (isActive) {
                     setReportsLoadError("");
                     setReports(Array.isArray(payload.reports) ? payload.reports : []);
+                    // Show notification for new reports
+                    const newReports = Array.isArray(payload.reports) ? payload.reports : [];
+                    if (newReports.length > previousReportCountRef.current && previousReportCountRef.current > 0) {
+                        const newCount = newReports.length - previousReportCountRef.current;
+                        void showNotification({
+                            title: "Omnilots",
+                            body: `${newCount} new parking report${newCount !== 1 ? "s" : ""} available`,
+                        });
+                    }
+                    previousReportCountRef.current = newReports.length;
+
 
                     if (session?.access_token) {
                         setIsUserParkedToday(Boolean(payload.viewerParkingState?.isParkedToday));
