@@ -81,7 +81,7 @@ const USER_LOCATION_MARKER_CLASS_NAME = "jac-user-location-marker";
 const SUBMIT_RETRY_BASE_DELAY_MS = 400;
 const SUBMIT_RETRY_MAX_ATTEMPTS = 3;
 const DEV_REPORTS_RESET_ENABLED = process.env.NODE_ENV !== "production";
-const REPORTS_RESET_KEY_HEADER = "x-jacpark-reset-key";
+const REPORTS_RESET_KEY_HEADER = "x-omnilots-reset-key";
 
 const TRANSIENT_SUBMIT_STATUSES: ReadonlySet<number> = new Set([408, 425, 429, 500, 502, 503, 504]);
 
