@@ -12,6 +12,7 @@ import { buildHeatmapFeatures, buildHeatmapPaint, type HeatmapReport } from "../
 import { getSupabaseBrowserClient } from "../lib/supabaseBrowser";
 import { useTheme } from "../lib/ThemeContext";
 import { checkAndRequestNotificationPermission, showNotification, subscribeToPushNotifications } from "../lib/notifications";
+import { computeStreak } from "../lib/gamification";
 import UserDashboard, { type PremiumStatus } from "./UserDashboard";
 import SettingsModal from "./SettingsModal";
 import LeaderboardModal from "./LeaderboardModal";
@@ -295,6 +296,67 @@ const FullnessIcon = ({ level, selected }: { level: number; selected: boolean })
     </svg>
 );
 
+const LocateIcon = () => (
+    <svg viewBox="0 0 24 24" className="h-[18px] w-[18px]" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+        <circle cx="12" cy="12" r="3" /><circle cx="12" cy="12" r="8" />
+        <path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
+    </svg>
+);
+
+const FlameIcon = () => (
+    <svg viewBox="0 0 24 24" className="h-[15px] w-[15px]" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+        <path d="M12 22a7 7 0 0 0 7-7c0-3-2-5-3-7 0 2-1 3-2 3 0-3-2-6-5-9-1 4-4 6-4 11a7 7 0 0 0 7 9z" />
+    </svg>
+);
+
+const BoltIcon = () => (
+    <svg viewBox="0 0 24 24" className="h-[14px] w-[14px]" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+        <path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z" />
+    </svg>
+);
+
+const FlagIcon = () => (
+    <svg viewBox="0 0 24 24" className="h-[14px] w-[14px]" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+        <path d="M5 21V4M5 4h11l-2 4 2 4H5" />
+    </svg>
+);
+
+const CheckIcon = () => (
+    <svg viewBox="0 0 24 24" className="h-[18px] w-[18px]" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+        <path d="M5 12l5 5L20 7" />
+    </svg>
+);
+
+const PinIcon = () => (
+    <svg viewBox="0 0 24 24" className="h-[18px] w-[18px]" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+        <path d="M12 22s7-7.5 7-13a7 7 0 1 0-14 0c0 5.5 7 13 7 13z" />
+        <circle cx="12" cy="9" r="2.5" />
+    </svg>
+);
+
+function PointBurst({ value, onDone }: { value: number; onDone: () => void }) {
+    useEffect(() => {
+        const t = setTimeout(onDone, 1400);
+        return () => clearTimeout(t);
+    }, [onDone]);
+    return (
+        <div className="fixed inset-0 z-50 pointer-events-none flex items-end justify-center pb-64">
+            <div
+                style={{
+                    animation: "point-fly 1.4s cubic-bezier(.2,.7,.3,1) forwards",
+                    fontWeight: 900,
+                    fontSize: 48,
+                    color: "var(--accent)",
+                    textShadow: "0 4px 20px rgba(0,0,0,0.4)",
+                    fontFamily: "var(--font-geist-mono, monospace)",
+                }}
+            >
+                +{value}
+            </div>
+        </div>
+    );
+}
+
 const getCurrentPosition = (): Promise<LatLng> =>
     new Promise((resolve, reject) => {
         if (!("geolocation" in navigator)) {
@@ -538,14 +600,13 @@ export default function ParkingMap() {
     const mapContainerRef = useRef<HTMLDivElement | null>(null);
     const mapRef = useRef<mapboxgl.Map | null>(null);
     const userLocationMarkerRef = useRef<mapboxgl.Marker | null>(null);
+    const parkedCarMarkerRef = useRef<mapboxgl.Marker | null>(null);
     const mapLightPresetRef = useRef<"day" | "night">("day");
-    const latestCardTouchStartRef = useRef<{ x: number; y: number } | null>(null);
     const panelTouchStartYRef = useRef<number | null>(null);
-const latestTransitionFrameRef = useRef<number | null>(null);
-    const previousUpdateClearTimeoutRef = useRef<number | null>(null);
-    const previousReportCountRef = useRef<number>(0);
     const notificationsInitializedRef = useRef<boolean>(false);
     const panelCloseTimeoutRef = useRef<number | null>(null);
+    const selectedActionRef = useRef<ReportActionType | null>(null);
+    const isManualLotSelectionRef = useRef<boolean>(false);
 
     const [session, setSession] = useState<Session | null>(null);
     const [isAuthReady, setIsAuthReady] = useState<boolean>(false);
@@ -593,10 +654,22 @@ const latestTransitionFrameRef = useRef<number | null>(null);
     const [parkedCarLocation, setParkedCarLocation] = useState<PremiumStatus["parkedCarLocation"]>(null);
     const [isFindingParkedCar, setIsFindingParkedCar] = useState<boolean>(false);
     const [isInstalledDisplayMode, setIsInstalledDisplayMode] = useState<boolean>(false);
+    const [userPoints, setUserPoints] = useState<number>(0);
+    const [streakDays, setStreakDays] = useState<number>(0);
+    const [showPointBurst, setShowPointBurst] = useState<boolean>(false);
+    const [lastEarnedPoints, setLastEarnedPoints] = useState<number>(5);
+    const [selectedLotName, setSelectedLotName] = useState<string | null>(null);
 
     const { isNearCampus, distanceToCampus, locationError, currentLocation } = useCampusProximity();
 
     const sessionDisplayName = useMemo(() => getSessionDisplayName(session), [session]);
+
+    const gpsLotName = useMemo(() => {
+        if (!currentLocation) return null;
+        return getLotForLocation(currentLocation.latitude, currentLocation.longitude)?.name ?? null;
+    }, [currentLocation]);
+
+    const activeLotName: string | null = selectedLotName ?? gpsLotName;
 
     const reportsRefreshIntervalMs = useMemo(() => {
         if (!Number.isFinite(distanceToCampus)) {
@@ -737,14 +810,6 @@ const latestTransitionFrameRef = useRef<number | null>(null);
 
     useEffect(() => {
         return () => {
-            if (latestTransitionFrameRef.current !== null) {
-                window.cancelAnimationFrame(latestTransitionFrameRef.current);
-            }
-
-            if (previousUpdateClearTimeoutRef.current !== null) {
-                window.clearTimeout(previousUpdateClearTimeoutRef.current);
-            }
-
             if (panelCloseTimeoutRef.current !== null) {
                 window.clearTimeout(panelCloseTimeoutRef.current);
             }
@@ -780,6 +845,7 @@ const latestTransitionFrameRef = useRef<number | null>(null);
                 ? devPremiumOverrideRef.current
                 : Boolean(payload.isPremium);
 
+        if (Number.isFinite(payload.points)) setUserPoints(Number(payload.points));
         setPremiumExpiresAt(premiumExpiresAtValue);
         setIsPremiumActive(premiumActiveValue);
         setPremiumMonthCostPoints(
@@ -855,6 +921,28 @@ const latestTransitionFrameRef = useRef<number | null>(null);
             window.removeEventListener("focus", refreshPremiumStatus);
         };
     }, [session?.access_token, applyPremiumStatus]);
+
+    useEffect(() => {
+        if (!session?.user?.id) {
+            setStreakDays(0);
+            return;
+        }
+        let isActive = true;
+        void computeStreak(session.user.id).then((days) => {
+            if (isActive) setStreakDays(days);
+        });
+        return () => { isActive = false; };
+    }, [session?.user?.id]);
+
+    // Keep selectedActionRef in sync so Mapbox click handlers can read it without stale closure
+    useEffect(() => { selectedActionRef.current = selectedAction; }, [selectedAction]);
+
+    // GPS auto-select: when user is inside a lot and no manual selection, auto-pick that lot
+    useEffect(() => {
+        if (isManualLotSelectionRef.current) return;
+        if (selectedAction) return; // don't change lot mid-form
+        setSelectedLotName(gpsLotName);
+    }, [gpsLotName, selectedAction]);
 
     const handleRecenterToUser = useCallback(async (): Promise<void> => {
         if (!mapRef.current || isRecenteringMap) {
@@ -1326,6 +1414,10 @@ const latestTransitionFrameRef = useRef<number | null>(null);
                 title: "Update Recorded",
                 body: actionMessages[actionToSubmit],
             });
+            const earnedPts = actionToSubmit === "observing" ? 1 : 5;
+            setLastEarnedPoints(earnedPts);
+            setShowPointBurst(true);
+            setUserPoints((prev) => prev + earnedPts);
             setReportFeedback("Report saved.");
         } catch {
             setReports(previousReportsSnapshot);
@@ -1384,17 +1476,6 @@ const latestTransitionFrameRef = useRef<number | null>(null);
                 if (isActive) {
                     setReportsLoadError("");
                     setReports(Array.isArray(payload.reports) ? payload.reports : []);
-                    // Show notification for new reports
-                    const newReports = Array.isArray(payload.reports) ? payload.reports : [];
-                    if (newReports.length > previousReportCountRef.current && previousReportCountRef.current > 0) {
-                        const newCount = newReports.length - previousReportCountRef.current;
-                        void showNotification({
-                            title: "Omnilots",
-                            body: `${newCount} new parking report${newCount !== 1 ? "s" : ""} available`,
-                        });
-                    }
-                    previousReportCountRef.current = newReports.length;
-
                     if (session?.access_token) {
                         setIsUserParkedToday(Boolean(payload.viewerParkingState?.isParkedToday));
                     } else {
@@ -1437,126 +1518,6 @@ const latestTransitionFrameRef = useRef<number | null>(null);
             window.removeEventListener("focus", refreshIfVisible);
         };
     }, [session?.access_token, reportsRefreshIntervalMs]);
-
-    useEffect(() => {
-        const newestReport = reports[0] ?? null;
-
-        if (!newestReport) {
-            setLatestReport(null);
-            setPreviousReport(null);
-            setIsPreviousReportFading(false);
-            setIsLatestReportEntering(false);
-            return;
-        }
-
-        if (!latestReport) {
-            setLatestReport(newestReport);
-            return;
-        }
-
-        if (newestReport.id === latestReport.id) {
-            return;
-        }
-
-        if (latestTransitionFrameRef.current !== null) {
-            window.cancelAnimationFrame(latestTransitionFrameRef.current);
-            latestTransitionFrameRef.current = null;
-        }
-
-        if (previousUpdateClearTimeoutRef.current !== null) {
-            window.clearTimeout(previousUpdateClearTimeoutRef.current);
-            previousUpdateClearTimeoutRef.current = null;
-        }
-
-        setPreviousReport(latestReport);
-        setIsPreviousReportFading(false);
-        setLatestReport(newestReport);
-        setIsLatestReportEntering(true);
-
-        latestTransitionFrameRef.current = window.requestAnimationFrame(() => {
-            setIsPreviousReportFading(true);
-            setIsLatestReportEntering(false);
-            latestTransitionFrameRef.current = null;
-        });
-
-        previousUpdateClearTimeoutRef.current = window.setTimeout(() => {
-            setPreviousReport(null);
-            previousUpdateClearTimeoutRef.current = null;
-        }, 450);
-    }, [reports, latestReport]);
-
-    useEffect(() => {
-        setLatestCardSwipeOffsetX(0);
-        setLatestCardSwipeOffsetY(0);
-        setIsLatestCardDragging(false);
-        latestCardTouchStartRef.current = null;
-
-        if (!latestReport) {
-            return;
-        }
-
-        setDismissedLatestReportId((currentDismissedId) => (currentDismissedId === latestReport.id ? currentDismissedId : null));
-    }, [latestReport]);
-
-    const visibleLatestReport = useMemo(() => {
-        if (!latestReport || latestReport.id === dismissedLatestReportId) {
-            return null;
-        }
-
-        return latestReport;
-    }, [latestReport, dismissedLatestReportId]);
-
-    const handleLatestReportTouchStart = (event: TouchEvent<HTMLDivElement>): void => {
-        if (!visibleLatestReport) {
-            return;
-        }
-
-        const touchPoint = event.touches[0];
-
-        if (!touchPoint) {
-            return;
-        }
-
-        latestCardTouchStartRef.current = {
-            x: touchPoint.clientX,
-            y: touchPoint.clientY,
-        };
-
-        setIsLatestCardDragging(true);
-    };
-
-    const handleLatestReportTouchMove = (event: TouchEvent<HTMLDivElement>): void => {
-        if (!latestCardTouchStartRef.current) {
-            return;
-        }
-
-        const touchPoint = event.touches[0];
-
-        if (!touchPoint) {
-            return;
-        }
-
-        const swipeDeltaX = touchPoint.clientX - latestCardTouchStartRef.current.x;
-        const swipeDeltaY = touchPoint.clientY - latestCardTouchStartRef.current.y;
-
-        setLatestCardSwipeOffsetX(swipeDeltaX);
-        setLatestCardSwipeOffsetY(Math.min(0, swipeDeltaY));
-    };
-
-    const handleLatestReportTouchEnd = (): void => {
-        setIsLatestCardDragging(false);
-
-        const shouldDismissByHorizontalSwipe = Math.abs(latestCardSwipeOffsetX) >= SWIPE_DISMISS_THRESHOLD_PX;
-        const shouldDismissByUpSwipe = latestCardSwipeOffsetY <= -SWIPE_UP_DISMISS_THRESHOLD_PX;
-
-        if ((shouldDismissByHorizontalSwipe || shouldDismissByUpSwipe) && visibleLatestReport) {
-            setDismissedLatestReportId(visibleLatestReport.id);
-        }
-
-        setLatestCardSwipeOffsetX(0);
-        setLatestCardSwipeOffsetY(0);
-        latestCardTouchStartRef.current = null;
-    };
 
     useEffect(() => {
         setPanelSwipeOffsetY(0);
@@ -1806,6 +1767,8 @@ const latestTransitionFrameRef = useRef<number | null>(null);
             isActive = false;
             userLocationMarkerRef.current?.remove();
             userLocationMarkerRef.current = null;
+            parkedCarMarkerRef.current?.remove();
+            parkedCarMarkerRef.current = null;
             map.off("load", handleMapLoad);
             map.off("style.load", handleMapStyleLoad);
             map.remove();
@@ -1909,6 +1872,74 @@ const latestTransitionFrameRef = useRef<number | null>(null);
         handleAddDevPointAt,
     ]);
 
+    // Lot tap: select a lot by clicking its polygon, deselect by clicking outside
+    useEffect(() => {
+        if (!isMapReady || !areBoundaryLayersReady || !mapRef.current) return;
+        const map = mapRef.current;
+
+        const handleLotClick = (e: mapboxgl.MapLayerMouseEvent): void => {
+            if (isPointEditorEnabled) return;
+            const lotName = e.features?.[0]?.properties?.name as string | undefined;
+            if (lotName) {
+                isManualLotSelectionRef.current = true;
+                setSelectedLotName(lotName);
+                setSelectedAction(null);
+                setFullnessLevel(null);
+            }
+        };
+
+        const handleMapClick = (e: mapboxgl.MapMouseEvent): void => {
+            if (isPointEditorEnabled) return;
+            if (selectedActionRef.current) return; // form is open — keep lot
+            const hits = map.queryRenderedFeatures(e.point, { layers: [BOUNDARY_FILL_LAYER_ID] });
+            if (hits.length === 0) {
+                isManualLotSelectionRef.current = false;
+                setSelectedLotName(null);
+            }
+        };
+
+        const onEnter = (): void => { map.getCanvas().style.cursor = "pointer"; };
+        const onLeave = (): void => { map.getCanvas().style.cursor = ""; };
+
+        map.on("click", BOUNDARY_FILL_LAYER_ID, handleLotClick);
+        map.on("click", handleMapClick);
+        map.on("mouseenter", BOUNDARY_FILL_LAYER_ID, onEnter);
+        map.on("mouseleave", BOUNDARY_FILL_LAYER_ID, onLeave);
+
+        return () => {
+            map.off("click", BOUNDARY_FILL_LAYER_ID, handleLotClick);
+            map.off("click", handleMapClick);
+            map.off("mouseenter", BOUNDARY_FILL_LAYER_ID, onEnter);
+            map.off("mouseleave", BOUNDARY_FILL_LAYER_ID, onLeave);
+        };
+    }, [isMapReady, areBoundaryLayersReady, isPointEditorEnabled]);
+
+    // Parked car marker
+    useEffect(() => {
+        if (!isMapReady || !mapRef.current) return;
+
+        if (!isPremiumActive || !parkedCarLocation) {
+            parkedCarMarkerRef.current?.remove();
+            parkedCarMarkerRef.current = null;
+            return;
+        }
+
+        const pos: LngLatTuple = [parkedCarLocation.longitude, parkedCarLocation.latitude];
+
+        if (parkedCarMarkerRef.current) {
+            parkedCarMarkerRef.current.setLngLat(pos);
+            return;
+        }
+
+        const el = document.createElement("div");
+        el.className = "jac-parked-car-pin";
+        el.innerHTML = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round"><path d="M6 16h12"/><path d="M7 16l1.5-5h7L17 16"/><circle cx="8" cy="18" r="1.5"/><circle cx="16" cy="18" r="1.5"/></svg>`;
+
+        parkedCarMarkerRef.current = new mapboxgl.Marker({ element: el, anchor: "bottom" })
+            .setLngLat(pos)
+            .addTo(mapRef.current);
+    }, [isMapReady, isPremiumActive, parkedCarLocation]);
+
     // Manage heatmap layer (rendered for free and premium with different paint)
     useEffect(() => {
         if (!isMapReady || !areBoundaryLayersReady || !mapRef.current || !mapRef.current.isStyleLoaded()) {
@@ -1984,503 +2015,377 @@ const latestTransitionFrameRef = useRef<number | null>(null);
             {/* Full-screen map */}
             <div ref={mapContainerRef} className="h-full w-full" />
 
-            {/* Top bar: minimal info */}
-            <div
-                className="absolute top-0 left-0 right-0 z-10 flex items-center justify-between px-4 py-3 sm:py-4"
-                style={{
-                    backgroundColor: "rgba(0, 0, 0, 0.26)",
-                    backdropFilter: "blur(8px)",
-                    paddingTop: "calc(0.75rem + max(0px, env(safe-area-inset-top)))",
-                }}
-            >
-                <div className="flex flex-col gap-1">
-                    <div className="flex items-center gap-2">
-                        {isNearCampus ? (
-                            <div className="text-sm sm:text-base font-semibold text-green-400">✓ In reporting zone</div>
-                        ) : (
-                            <>
-                                <div className="text-sm sm:text-base font-semibold text-white">
-                                    {formatDistance(distanceToCampus)} away
-                                </div>
-                                <div className="text-xs sm:text-sm font-medium text-amber-400">from zone</div>
-                            </>
-                        )}
-                    </div>
+            {/* PointBurst overlay */}
+            {showPointBurst && <PointBurst value={lastEarnedPoints} onDone={() => setShowPointBurst(false)} />}
 
-                    <div className="flex items-center gap-2 text-[11px] sm:text-xs">
-                        {isPremiumActive ? (
-                            <span className="rounded-full border border-amber-300/60 bg-amber-500/25 px-2.5 py-1 font-semibold text-amber-100">
-                                Premium heatmap live
-                            </span>
-                        ) : (
-                            <span
-                                className="rounded-full border px-2.5 py-1 font-semibold text-white"
-                                style={{
-                                    borderColor:
-                                        zoneAvailability === "open"
-                                            ? "rgba(74, 222, 128, 0.65)"
-                                            : zoneAvailability === "limited"
-                                              ? "rgba(251, 191, 36, 0.65)"
-                                              : "rgba(248, 113, 113, 0.7)",
-                                    backgroundColor:
-                                        zoneAvailability === "open"
-                                            ? "rgba(34, 197, 94, 0.24)"
-                                            : zoneAvailability === "limited"
-                                              ? "rgba(245, 158, 11, 0.24)"
-                                              : "rgba(220, 38, 38, 0.24)",
-                                }}
-                            >
-                                Zone status:{" "}
-                                {zoneAvailability === "open" ? "Open" : zoneAvailability === "limited" ? "Limited" : "Full"}
-                            </span>
-                        )}
-                    </div>
+            {/* Desktop notice */}
+            <div className="hidden md:flex absolute inset-0 items-center justify-center z-10 pointer-events-none">
+                <div
+                    className="px-6 py-4 rounded-2xl text-center"
+                    style={{ backgroundColor: "var(--surface)", border: "1px solid var(--line)", boxShadow: "0 8px 32px rgba(0,0,0,0.12)" }}
+                >
+                    <p className="text-base font-bold mb-1" style={{ color: "var(--foreground)" }}>Omnilots is designed for mobile</p>
+                    <p className="text-sm" style={{ color: "var(--muted)" }}>Install the app on your phone to report parking.</p>
                 </div>
-                <div className="flex flex-col items-end gap-1">
-                    <div className="flex items-center gap-2">
-                        {DEV_REPORTS_RESET_ENABLED ? (
-                            <>
-                                <button
-                                    type="button"
-                                    onClick={handleDevPremiumToggle}
-                                    className="rounded-full px-3 py-1.5 text-[11px] font-semibold text-white transition"
-                                    style={{
-                                        backgroundColor: isPremiumActive
-                                            ? "rgba(245, 158, 11, 0.75)"
-                                            : "rgba(245, 158, 11, 0.3)",
-                                    }}
-                                >
-                                    {isPremiumActive ? "Premium ON" : "Premium OFF"}
-                                </button>
+            </div>
 
-                                <button
-                                    type="button"
-                                    onClick={() => {
-                                        setIsPointEditorEnabled((current) => !current);
-                                    }}
-                                    disabled={isSeedingReports || isResettingReports || isAddingDevPoint}
-                                    className="rounded-full px-3 py-1.5 text-[11px] font-semibold text-white transition disabled:opacity-60"
-                                    style={{
-                                        backgroundColor: isPointEditorEnabled
-                                            ? "rgba(59, 130, 246, 0.7)"
-                                            : "rgba(59, 130, 246, 0.4)",
-                                    }}
-                                >
-                                    {isPointEditorEnabled ? "Editor on" : "Point editor"}
-                                </button>
+            {/* Top bar — mobile only */}
+            <div
+                className="absolute top-0 left-0 right-0 z-10 px-3 md:hidden"
+                style={{ paddingTop: "calc(0.75rem + max(0px, env(safe-area-inset-top)))" }}
+            >
+                {/* Main row: lot info + pills */}
+                <div className="flex items-center gap-2.5 mb-2">
+                    {/* Lot info card */}
+                    <div
+                        className="flex-1 flex items-center gap-2.5 px-3 py-2.5 rounded-2xl min-w-0"
+                        style={{
+                            backgroundColor: "var(--surface)",
+                            border: "1px solid var(--line)",
+                            boxShadow: "0 6px 22px rgba(0,0,0,0.1)",
+                            backdropFilter: "blur(12px)",
+                        }}
+                    >
+                        <div
+                            className="w-8 h-8 rounded-[10px] flex items-center justify-center flex-shrink-0"
+                            style={{ background: "var(--accent-soft)", color: "var(--accent)" }}
+                        >
+                            <LocateIcon />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                            <div className="text-[10px] font-extrabold uppercase tracking-[0.05em]" style={{ color: "var(--muted)" }}>
+                                {isNearCampus ? "You're in the zone" : "Parking zone"}
+                            </div>
+                            <div className="text-[13px] font-extrabold truncate" style={{ color: "var(--foreground)" }}>
+                                {isNearCampus
+                                    ? `${activeLotName} · ${zoneAvailability === "open" ? "Open" : zoneAvailability === "limited" ? "Limited" : "Full"}`
+                                    : `${formatDistance(distanceToCampus)} from zone`}
+                            </div>
+                        </div>
+                    </div>
 
-                                <button
-                                    type="button"
-                                    onClick={() => {
-                                        void handleSeedReportsForTesting();
-                                    }}
-                                    disabled={isSeedingReports || isResettingReports || isAddingDevPoint}
-                                    className="rounded-full px-3 py-1.5 text-[11px] font-semibold text-white transition disabled:opacity-60"
-                                    style={{ backgroundColor: "rgba(16, 185, 129, 0.55)" }}
-                                >
-                                    {isSeedingReports ? "Seeding..." : "Seed sample"}
-                                </button>
-
-                                <button
-                                    type="button"
-                                    onClick={() => {
-                                        void handleResetReportsForTesting();
-                                    }}
-                                    disabled={isResettingReports || isSeedingReports || isAddingDevPoint}
-                                    className="rounded-full px-3 py-1.5 text-[11px] font-semibold text-white transition disabled:opacity-60"
-                                    style={{ backgroundColor: "rgba(244, 63, 94, 0.55)" }}
-                                >
-                                    {isResettingReports ? "Clearing..." : "Clear reports"}
-                                </button>
-                            </>
-                        ) : null}
-
-                        {session ? (
+                    {/* Auth: logged in → streak + XP + avatar */}
+                    {session && (
+                        <div className="flex items-center gap-1.5 flex-shrink-0">
+                            <div
+                                className="flex items-center gap-1 px-2.5 py-1.5 rounded-full"
+                                style={{ backgroundColor: "var(--surface)", border: "1px solid var(--line)", boxShadow: "0 4px 12px rgba(0,0,0,0.06)", backdropFilter: "blur(8px)", color: "var(--streak)" }}
+                            >
+                                <FlameIcon />
+                                <span className="text-[13px] font-extrabold" style={{ color: "var(--foreground)" }}>{streakDays}</span>
+                            </div>
+                            <div
+                                className="flex items-center gap-1 px-2.5 py-1.5 rounded-full"
+                                style={{ backgroundColor: "var(--surface)", border: "1px solid var(--line)", boxShadow: "0 4px 12px rgba(0,0,0,0.06)", backdropFilter: "blur(8px)", color: "var(--accent)" }}
+                            >
+                                <BoltIcon />
+                                <span className="text-[13px] font-extrabold" style={{ color: "var(--foreground)", fontFamily: "var(--font-geist-mono, monospace)" }}>{userPoints}</span>
+                            </div>
                             <button
                                 type="button"
                                 onClick={() => setShowDashboard(true)}
-                                className="rounded-full p-1.5 text-white transition hover:text-white/90"
-                                style={{ backgroundColor: "transparent" }}
+                                className="w-9 h-9 rounded-full flex items-center justify-center font-extrabold text-sm text-white flex-shrink-0"
+                                style={{
+                                    background: "linear-gradient(135deg, var(--accent), #5b8df7)",
+                                    border: "2px solid rgba(255,255,255,0.75)",
+                                    boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+                                }}
                                 aria-label="Open profile"
                             >
-                                <ProfileOutlineIcon />
+                                {sessionDisplayName.charAt(0).toUpperCase() || "U"}
                             </button>
-                        ) : isInstalledDisplayMode ? (
-                            <button
-                                type="button"
-                                onClick={() => router.push("/login")}
-                                className="rounded-full border px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-white/12"
-                                style={{
-                                    borderColor: "rgba(255, 255, 255, 0.52)",
-                                    backgroundColor: "rgba(15, 23, 42, 0.34)",
-                                }}
-                            >
-                                Sign in
-                            </button>
-                        ) : (
-                            <div className="text-xs text-gray-300">Sign in to report</div>
-                        )}
-                    </div>
+                        </div>
+                    )}
 
-                    {resetReportsFeedback ? (
-                        <p className="max-w-[180px] text-right text-[11px] font-medium text-white/90">{resetReportsFeedback}</p>
-                    ) : null}
-
-                    {session && !isPremiumActive ? (
+                    {/* Auth: logged out */}
+                    {!session && isAuthReady && isInstalledDisplayMode && (
                         <button
                             type="button"
-                            onClick={() => setShowDashboard(true)}
-                            className="rounded-full border px-3 py-1 text-[11px] font-semibold text-amber-100 transition hover:bg-amber-300/20"
-                            style={{
-                                borderColor: "rgba(252, 211, 77, 0.62)",
-                                backgroundColor: "rgba(217, 119, 6, 0.26)",
-                            }}
+                            onClick={() => router.push("/login")}
+                            className="rounded-full px-3 py-1.5 text-xs font-semibold flex-shrink-0"
+                            style={{ border: "1px solid rgba(255,255,255,0.5)", backgroundColor: "rgba(15,23,42,0.5)", color: "#fff" }}
                         >
-                            Unlock Premium ({premiumMonthCostPoints} pts/month)
+                            Sign in
                         </button>
-                    ) : null}
-
-                    {session && isPremiumActive && premiumExpiryLabel ? (
-                        <p className="text-[11px] font-medium text-amber-100/90">Premium until {premiumExpiryLabel}</p>
-                    ) : null}
-
-                    {DEV_REPORTS_RESET_ENABLED && isPointEditorEnabled ? (
-                        <div
-                            className="w-[240px] rounded-xl border p-2"
-                            style={{
-                                borderColor: "rgba(59,130,246,0.55)",
-                                backgroundColor: "rgba(12, 18, 31, 0.78)",
-                                backdropFilter: "blur(8px)",
-                            }}
-                        >
-                            <p className="text-[11px] font-semibold text-white">Tap map to place a simulated report</p>
-                            <p className="mt-1 text-[10px] text-white/75">Pick action + fullness, then tap any location.</p>
-
-                            <div className="mt-2 grid grid-cols-3 gap-1">
-                                {(["parked", "leaving", "observing"] as ReportActionType[]).map((actionType) => {
-                                    const isSelected = devPointActionType === actionType;
-
-                                    return (
-                                        <button
-                                            key={actionType}
-                                            type="button"
-                                            onClick={() => {
-                                                setDevPointActionType(actionType);
-                                            }}
-                                            className="rounded-md px-2 py-1 text-[10px] font-semibold text-white transition"
-                                            style={{
-                                                backgroundColor: isSelected ? "rgba(59,130,246,0.72)" : "rgba(148,163,184,0.32)",
-                                            }}
-                                        >
-                                            {actionType === "observing" ? "observe" : actionType}
-                                        </button>
-                                    );
-                                })}
-                            </div>
-
-                            <div className="mt-2 grid grid-cols-5 gap-1">
-                                {[1, 2, 3, 4, 5].map((level) => {
-                                    const isSelected = devPointFullnessLevel === level;
-
-                                    return (
-                                        <button
-                                            key={level}
-                                            type="button"
-                                            onClick={() => {
-                                                setDevPointFullnessLevel(level);
-                                            }}
-                                            className="rounded-md px-0 py-1 text-[10px] font-semibold text-white transition"
-                                            style={{
-                                                backgroundColor: isSelected ? "rgba(16,185,129,0.7)" : "rgba(148,163,184,0.3)",
-                                            }}
-                                        >
-                                            {level}
-                                        </button>
-                                    );
-                                })}
-                            </div>
-
-                            <p className="mt-2 text-[10px] text-white/80">
-                                {isAddingDevPoint
-                                    ? "Adding point..."
-                                    : `${REPORT_ACTION_CONFIG[devPointActionType].label} · fullness ${devPointFullnessLevel}`}
-                            </p>
-                        </div>
-                    ) : null}
+                    )}
                 </div>
 
-                <div
-                    className="pointer-events-none absolute inset-x-0 -bottom-4 h-4"
-                    style={{
-                        background:
-                            "linear-gradient(to bottom, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.08) 42%, rgba(255, 255, 255, 0))",
-                        opacity: 0.34,
-                    }}
-                />
+                {/* Dev controls */}
+                {DEV_REPORTS_RESET_ENABLED && (
+                    <div className="flex flex-wrap gap-1.5 mt-1">
+                        <button type="button" onClick={handleDevPremiumToggle}
+                            className="rounded-full px-2.5 py-1 text-[10px] font-semibold text-white"
+                            style={{ backgroundColor: isPremiumActive ? "rgba(245,158,11,0.75)" : "rgba(245,158,11,0.3)" }}>
+                            {isPremiumActive ? "Premium ON" : "Premium OFF"}
+                        </button>
+                        <button type="button" onClick={() => setIsPointEditorEnabled((c) => !c)}
+                            disabled={isSeedingReports || isResettingReports || isAddingDevPoint}
+                            className="rounded-full px-2.5 py-1 text-[10px] font-semibold text-white disabled:opacity-60"
+                            style={{ backgroundColor: isPointEditorEnabled ? "rgba(59,130,246,0.7)" : "rgba(59,130,246,0.4)" }}>
+                            {isPointEditorEnabled ? "Editor on" : "Point editor"}
+                        </button>
+                        <button type="button" onClick={() => void handleSeedReportsForTesting()}
+                            disabled={isSeedingReports || isResettingReports || isAddingDevPoint}
+                            className="rounded-full px-2.5 py-1 text-[10px] font-semibold text-white disabled:opacity-60"
+                            style={{ backgroundColor: "rgba(16,185,129,0.55)" }}>
+                            {isSeedingReports ? "Seeding..." : "Seed"}
+                        </button>
+                        <button type="button" onClick={() => void handleResetReportsForTesting()}
+                            disabled={isResettingReports || isSeedingReports || isAddingDevPoint}
+                            className="rounded-full px-2.5 py-1 text-[10px] font-semibold text-white disabled:opacity-60"
+                            style={{ backgroundColor: "rgba(244,63,94,0.55)" }}>
+                            {isResettingReports ? "Clearing..." : "Clear"}
+                        </button>
+                        {resetReportsFeedback && <span className="text-[10px] text-white/90 px-1 py-1">{resetReportsFeedback}</span>}
+                    </div>
+                )}
+
+                {/* Dev point editor panel */}
+                {DEV_REPORTS_RESET_ENABLED && isPointEditorEnabled && (
+                    <div className="mt-1 rounded-xl border p-2"
+                        style={{ borderColor: "rgba(59,130,246,0.55)", backgroundColor: "rgba(12,18,31,0.88)", backdropFilter: "blur(8px)" }}>
+                        <p className="text-[11px] font-semibold text-white">Tap map to place a simulated report</p>
+                        <div className="mt-2 grid grid-cols-3 gap-1">
+                            {(["parked", "leaving", "observing"] as ReportActionType[]).map((at) => (
+                                <button key={at} type="button" onClick={() => setDevPointActionType(at)}
+                                    className="rounded-md px-2 py-1 text-[10px] font-semibold text-white"
+                                    style={{ backgroundColor: devPointActionType === at ? "rgba(59,130,246,0.72)" : "rgba(148,163,184,0.32)" }}>
+                                    {at === "observing" ? "observe" : at}
+                                </button>
+                            ))}
+                        </div>
+                        <div className="mt-1 grid grid-cols-5 gap-1">
+                            {[1,2,3,4,5].map((l) => (
+                                <button key={l} type="button" onClick={() => setDevPointFullnessLevel(l)}
+                                    className="rounded-md py-1 text-[10px] font-semibold text-white"
+                                    style={{ backgroundColor: devPointFullnessLevel === l ? "rgba(16,185,129,0.7)" : "rgba(148,163,184,0.3)" }}>
+                                    {l}
+                                </button>
+                            ))}
+                        </div>
+                        <p className="mt-1 text-[10px] text-white/80">
+                            {isAddingDevPoint ? "Adding..." : `${REPORT_ACTION_CONFIG[devPointActionType].label} · fullness ${devPointFullnessLevel}`}
+                        </p>
+                    </div>
+                )}
+
             </div>
 
-            {/* Bottom sheet: report form (only show when action selected) */}
-            {selectedAction && (
-                <div
-                    className="fixed bottom-0 left-0 right-0 z-20 pt-3"
-                    style={{
-                        animation: "slideUp 0.3s ease-out",
-                        transform: `translateY(${panelSwipeOffsetY}px)`,
-                        transition: isPanelDragging
-                            ? "none"
-                            : isPanelClosing
-                              ? "transform 0.32s cubic-bezier(0.2, 0.8, 0.2, 1)"
-                              : "transform 0.18s ease-out",
-                        touchAction: "none",
-                        overscrollBehaviorY: "contain",
-                    }}
-                    onTouchStart={handlePanelTouchStart}
-                    onTouchMove={handlePanelTouchMove}
-                    onTouchEnd={handlePanelTouchEnd}
-                    onTouchCancel={handlePanelTouchEnd}
-                >
-                    <div
-                        className="rounded-t-3xl shadow-2xl p-4 sm:p-6 max-h-[80dvh] overflow-auto"
+            {/* Recenter FAB — mobile only, above bottom sheet */}
+            {isAuthReady && session && !selectedAction && (
+                <div className="absolute right-4 z-10 md:hidden" style={{ bottom: activeLotName ? "calc(200px + max(0px, env(safe-area-inset-bottom)))" : "1.5rem" }}>
+                    <button
+                        type="button"
+                        onClick={() => void handleRecenterToUser()}
+                        disabled={isRecenteringMap}
+                        className="w-11 h-11 rounded-[14px] flex items-center justify-center disabled:opacity-60"
                         style={{
                             backgroundColor: "var(--surface)",
-                            borderColor: "var(--line)",
-                            borderWidth: "1px",
-                            borderBottomWidth: "0px",
+                            border: "1px solid var(--line)",
+                            boxShadow: "0 4px 14px rgba(0,0,0,0.12)",
+                            backdropFilter: "blur(8px)",
+                            color: "var(--foreground)",
                         }}
+                        aria-label="Center map on my location"
                     >
-                        {/* Handle bar */}
-                        <div className="flex justify-center mb-2">
-                            <div className="w-12 h-1 rounded-full" style={{ backgroundColor: "var(--line)" }}></div>
-                        </div>
-
-                        {/* Form header */}
-                        <div className="flex items-center justify-between mb-4">
-                            <h3 className="text-lg font-semibold">{REPORT_ACTION_CONFIG[selectedAction].label}</h3>
-                            <span className="text-xs font-medium" style={{ color: "var(--muted)" }}>
-                                Swipe down to close
-                            </span>
-                        </div>
-
-                        {/* Description */}
-                        <p className="text-sm mb-4" style={{ color: "var(--muted)" }}>
-                            {REPORT_ACTION_CONFIG[selectedAction].description}
-                        </p>
-
-                        {/* Fullness selector */}
-                        <form onSubmit={handleReportSubmit} className="space-y-4">
-                            <div>
-                                <label
-                                    className="text-xs font-semibold uppercase tracking-[0.14em]"
-                                    style={{ color: "var(--muted)" }}
-                                >
-                                    Fullness Level
-                                </label>
-                                <div className="mt-3 grid grid-cols-5 gap-2">
-                                    {[1, 2, 3, 4, 5].map((level) => {
-                                        const isSelected = fullnessLevel === level;
-                                        const styleSet = FULLNESS_BUTTON_STYLES[level];
-
-                                        return (
-                                            <button
-                                                key={level}
-                                                type="button"
-                                                onClick={() => setFullnessLevel(level)}
-                                                className={`rounded-lg border px-2 py-3 text-center transition ${
-                                                    isSelected ? styleSet.selected : styleSet.idle
-                                                }`}
-                                                aria-label={`Select fullness level ${level}`}
-                                            >
-                                                <span className="flex justify-center text-lg mb-1">
-                                                    <FullnessIcon level={level} selected={isSelected} />
-                                                </span>
-                                                <span className="text-xs font-semibold">{level}</span>
-                                            </button>
-                                        );
-                                    })}
-                                </div>
-                                {fullnessLevel && (
-                                    <p className="mt-2 text-xs" style={{ color: "var(--muted)" }}>
-                                        {FULLNESS_DESCRIPTIONS[fullnessLevel]}
-                                    </p>
-                                )}
-                            </div>
-
-                            {reportFeedback && (
-                                <p
-                                    className="text-xs font-medium"
-                                    style={{ color: reportFeedback.includes("saved") ? "var(--foreground)" : "#ef4444" }}
-                                >
-                                    {reportFeedback}
-                                </p>
-                            )}
-
-                            <button
-                                type="submit"
-                                disabled={!canSubmitReport}
-                                className="w-full rounded-xl bg-gradient-to-r from-sky-600 to-cyan-600 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-sky-500/25 transition hover:from-sky-500 hover:to-cyan-500 disabled:cursor-not-allowed disabled:from-slate-400 disabled:to-slate-400 disabled:shadow-none"
-                            >
-                                {isSubmittingReport ? "Submitting..." : "Submit"}
-                            </button>
-                        </form>
-                    </div>
+                        <RecenterIcon />
+                    </button>
                 </div>
             )}
 
-            {/* Floating action buttons (bottom right) - always visible */}
-            {isAuthReady && session ? (
-                <div className="fixed bottom-6 sm:bottom-6 right-4 sm:right-6 z-10 flex flex-col gap-3 sm:gap-3">
-                    {!selectedAction && (
-                        <>
-                            <button
-                                type="button"
-                                onClick={() => {
-                                    void handleRecenterToUser();
-                                }}
-                                disabled={isRecenteringMap}
-                                className="group relative flex h-14 w-14 self-end items-center justify-center rounded-full border text-white backdrop-blur-md transition duration-300 hover:-translate-y-0.5 disabled:opacity-60"
-                                style={{
-                                    background: "radial-gradient(circle at 30% 30%, rgba(255,255,255,0.25), rgba(15,23,42,0.66))",
-                                    borderColor: "rgba(255, 255, 255, 0.7)",
-                                    boxShadow: "0 16px 30px rgba(15, 23, 42, 0.45)",
-                                    animation: "jac-action-button-in 0.42s cubic-bezier(0.22, 1, 0.36, 1) 120ms both",
-                                }}
-                                title="Center map on my location"
-                                aria-label="Center map on my location"
-                            >
-                                <RecenterIcon />
-                            </button>
-
-                            {ACTION_BUTTON_RENDER_ORDER.map((actionType) => {
-                                const isDisabled = isActionDisabledForParkState(actionType, isUserParkedToday);
-                                const visuals = ACTION_BUTTON_VISUALS[actionType];
-
-                                const disabledBackground =
-                                    "linear-gradient(135deg, rgba(71, 85, 105, 0.8), rgba(51, 65, 85, 0.8))";
-
-                                return (
-                                    <button
-                                        key={actionType}
-                                        type="button"
-                                        onClick={() => !isDisabled && setSelectedAction(actionType)}
-                                        disabled={isDisabled}
-                                        className="group relative flex min-w-[11.75rem] items-center gap-2.5 overflow-hidden rounded-2xl border px-4 py-3 text-left text-white backdrop-blur-md transition duration-300 hover:-translate-y-0.5"
-                                        style={{
-                                            background: isDisabled ? disabledBackground : visuals.gradient,
-                                            color: "white",
-                                            opacity: isDisabled ? 0.56 : 1,
-                                            cursor: isDisabled ? "not-allowed" : "pointer",
-                                            borderColor: isDisabled ? "rgba(148, 163, 184, 0.3)" : visuals.borderColor,
-                                            boxShadow: isDisabled ? "0 12px 24px rgba(15,23,42,0.28)" : visuals.glow,
-                                            animation: `jac-action-button-in 0.42s cubic-bezier(0.22, 1, 0.36, 1) ${ACTION_BUTTON_ENTRANCE_DELAY_MS[actionType]}ms both`,
-                                        }}
-                                        title={REPORT_ACTION_CONFIG[actionType].label}
-                                    >
-                                        <span className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.28),transparent_62%)] opacity-75" />
-
-                                        <span
-                                            className="relative flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full border border-white/30"
-                                            style={{
-                                                backgroundColor: isDisabled ? "rgba(148, 163, 184, 0.25)" : visuals.iconSurface,
-                                            }}
-                                        >
-                                            <ActionIcon actionType={actionType} />
-                                        </span>
-
-                                        <span className="relative text-xs font-bold leading-tight sm:text-sm">
-                                            {REPORT_ACTION_CONFIG[actionType].label}
-                                        </span>
-                                    </button>
-                                );
-                            })}
-
-                            {isPremiumActive ? (
-                                <button
-                                    type="button"
-                                    onClick={handleFindMyCar}
-                                    disabled={!parkedCarLocation || isFindingParkedCar}
-                                    className="group relative flex min-w-[11.75rem] items-center gap-2.5 overflow-hidden rounded-2xl border px-4 py-3 text-left text-white backdrop-blur-md transition duration-300 hover:-translate-y-0.5 disabled:opacity-55"
-                                    style={{
-                                        background: "linear-gradient(135deg, rgba(91, 33, 182, 0.9), rgba(126, 34, 206, 0.9))",
-                                        borderColor: "rgba(216, 180, 254, 0.62)",
-                                        boxShadow: "0 16px 32px rgba(91, 33, 182, 0.38)",
-                                        cursor: !parkedCarLocation || isFindingParkedCar ? "not-allowed" : "pointer",
-                                        animation: "jac-action-button-in 0.42s cubic-bezier(0.22, 1, 0.36, 1) 240ms both",
-                                    }}
-                                    title={
-                                        parkedCarLocation ? "Center map on saved parked car" : "Park first to save car location"
-                                    }
-                                >
-                                    <span className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.28),transparent_62%)] opacity-75" />
-                                    <span className="relative flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full border border-white/30 bg-white/20">
-                                        <svg
-                                            viewBox="0 0 24 24"
-                                            className="h-5 w-5"
-                                            fill="none"
-                                            stroke="currentColor"
-                                            strokeWidth="2"
-                                        >
-                                            <path d="M6 16h12" />
-                                            <path d="M7 16l1.5-5h7L17 16" />
-                                            <circle cx="8" cy="18" r="1.5" />
-                                            <circle cx="16" cy="18" r="1.5" />
-                                            <path d="M12 4v3" />
-                                        </svg>
-                                    </span>
-                                    <span className="relative text-xs font-bold leading-tight sm:text-sm">
-                                        {parkedCarLocation ? "Find my car" : "Park to enable Find my car"}
-                                    </span>
-                                </button>
-                            ) : null}
-                        </>
-                    )}
-                </div>
-            ) : null}
-
-            {/* Latest update card - top, swipe left/right/up to dismiss */}
-            {isAuthReady && visibleLatestReport && !(DEV_REPORTS_RESET_ENABLED && isPointEditorEnabled) ? (
-                <div className="absolute left-0 right-0 top-20 z-20 px-3 sm:top-24 sm:px-4">
+            {/* Persistent bottom sheet — shown when logged in and a lot is selected */}
+            {isAuthReady && session && activeLotName && (
+                <div
+                    className="fixed bottom-0 left-0 right-0 z-10 md:hidden"
+                    style={{
+                        transform: selectedAction ? `translateY(${panelSwipeOffsetY}px)` : undefined,
+                        transition: selectedAction
+                            ? (isPanelDragging ? "none" : isPanelClosing ? "transform 0.32s cubic-bezier(0.2,0.8,0.2,1)" : "transform 0.18s ease-out")
+                            : undefined,
+                        touchAction: selectedAction ? "none" : undefined,
+                        overscrollBehaviorY: "contain",
+                    }}
+                    onTouchStart={selectedAction ? handlePanelTouchStart : undefined}
+                    onTouchMove={selectedAction ? handlePanelTouchMove : undefined}
+                    onTouchEnd={selectedAction ? handlePanelTouchEnd : undefined}
+                    onTouchCancel={selectedAction ? handlePanelTouchEnd : undefined}
+                >
                     <div
-                        className="mx-auto w-full max-w-sm rounded-2xl border p-3 shadow-lg sm:p-4"
+                        className="rounded-t-[20px]"
                         style={{
                             backgroundColor: "var(--surface)",
-                            borderColor: "var(--line)",
-                            transform: `translate3d(${latestCardSwipeOffsetX}px, ${latestCardSwipeOffsetY}px, 0)`,
-                            opacity: Math.max(
-                                0.28,
-                                1 -
-                                    Math.max(Math.abs(latestCardSwipeOffsetX), Math.abs(Math.min(0, latestCardSwipeOffsetY))) /
-                                        180,
-                            ),
-                            transition: isLatestCardDragging ? "none" : "transform 0.16s ease, opacity 0.16s ease",
-                            touchAction: "none",
+                            borderTop: "1px solid var(--line)",
+                            borderLeft: "1px solid var(--line)",
+                            borderRight: "1px solid var(--line)",
+                            boxShadow: "0 -10px 40px rgba(0,0,0,0.14)",
+                            backdropFilter: "blur(16px)",
                         }}
-                        onTouchStart={handleLatestReportTouchStart}
-                        onTouchMove={handleLatestReportTouchMove}
-                        onTouchEnd={handleLatestReportTouchEnd}
-                        onTouchCancel={handleLatestReportTouchEnd}
                     >
-                        <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0">
-                                <p className="text-xs font-semibold sm:text-sm" style={{ color: "var(--foreground)" }}>
-                                    {formatPublicUpdateText(visibleLatestReport.actionType)}
-                                </p>
-                                <div className="mt-1 flex items-center gap-2">
-                                    <span className="text-xs" style={{ color: "var(--muted)" }}>
-                                        {formatUpdateTime(visibleLatestReport.createdAt)}
-                                    </span>
-                                    <span className="text-xs font-semibold">
-                                        {FULLNESS_DESCRIPTIONS[visibleLatestReport.fullnessLevel ?? 3]}
-                                    </span>
-                                </div>
-                            </div>
+                        {/* Drag handle */}
+                        <div className="flex justify-center pt-3 pb-1">
+                            <div className="w-9 h-1 rounded-full" style={{ backgroundColor: "var(--line)" }} />
                         </div>
 
-                        <div className="mt-2 text-[11px]" style={{ color: "var(--muted)" }}>
-                            Swipe left, right, or up to dismiss
-                        </div>
+                        {!selectedAction ? (
+                            /* Lot info + quick actions */
+                            <div className="px-4 pt-2" style={{ paddingBottom: "calc(1.75rem + max(0px, env(safe-area-inset-bottom)))" }}>
+                                <div className="flex items-center gap-3 mb-3">
+                                    <div
+                                        className="w-12 h-12 rounded-[14px] flex items-center justify-center font-extrabold text-sm text-white flex-shrink-0"
+                                        style={{
+                                            background: zoneAvailability === "open" ? "#10b981" : zoneAvailability === "limited" ? "#f59e0b" : "#dc2626",
+                                        }}
+                                    >
+                                        {zoneAvailability === "open" ? "84" : zoneAvailability === "limited" ? "52" : "12"}
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                        <div className="text-[18px] font-extrabold leading-tight" style={{ color: "var(--foreground)" }}>
+                                            {activeLotName}
+                                        </div>
+                                        <div className="text-xs mt-0.5" style={{ color: "var(--muted)" }}>
+                                            {zoneAvailability === "open" ? "Open" : zoneAvailability === "limited" ? "Limited" : "Full"}
+                                            {" · "}
+                                            {isLoadingReports ? "Loading..." : `${reports.filter((r) => !r.id.startsWith("optimistic-")).length} reports today`}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <button
+                                    type="button"
+                                    onClick={() => !isActionDisabledForParkState("parked", isUserParkedToday) && setSelectedAction("parked")}
+                                    disabled={isActionDisabledForParkState("parked", isUserParkedToday)}
+                                    className="w-full py-[14px] rounded-[14px] flex items-center justify-center gap-2 text-[15px] font-extrabold mb-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    style={{ background: "var(--accent)", color: "#fff", boxShadow: "0 4px 14px rgba(34,211,194,0.25)" }}
+                                >
+                                    <ActionIcon actionType="parked" />
+                                    I parked here
+                                    <span className="ml-1.5 px-2 py-0.5 rounded-full text-[11px] font-extrabold" style={{ background: "rgba(0,0,0,0.18)" }}>+5</span>
+                                </button>
+
+                                <div className="grid grid-cols-2 gap-2">
+                                    <button
+                                        type="button"
+                                        onClick={() => !isActionDisabledForParkState("leaving", isUserParkedToday) && setSelectedAction("leaving")}
+                                        disabled={isActionDisabledForParkState("leaving", isUserParkedToday)}
+                                        className="py-3 rounded-xl flex items-center justify-center gap-1.5 text-[13px] font-bold disabled:opacity-50 disabled:cursor-not-allowed"
+                                        style={{ background: "transparent", border: "1.5px solid var(--line)", color: "var(--foreground)" }}
+                                    >
+                                        <ActionIcon actionType="leaving" />
+                                        I&apos;m leaving
+                                        <span className="text-[10px]" style={{ color: "var(--muted)" }}>+5</span>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setSelectedAction("observing")}
+                                        className="py-3 rounded-xl flex items-center justify-center gap-1.5 text-[13px] font-bold"
+                                        style={{ background: "transparent", border: "1.5px solid var(--line)", color: "var(--foreground)" }}
+                                    >
+                                        <ActionIcon actionType="observing" />
+                                        Just checking
+                                        <span className="text-[10px]" style={{ color: "var(--muted)" }}>+1</span>
+                                    </button>
+                                </div>
+
+                                {reportFeedback && (
+                                    <p className="mt-2 text-xs font-medium text-center" style={{ color: reportFeedback.includes("saved") ? "var(--accent)" : "#ef4444" }}>
+                                        {reportFeedback}
+                                    </p>
+                                )}
+                            </div>
+                        ) : (
+                            /* Fullness form */
+                            <div className="px-4 pt-2" style={{ paddingBottom: "calc(2rem + max(0px, env(safe-area-inset-bottom)))" }}>
+                                <div className="flex items-center gap-2.5 mb-4">
+                                    <div
+                                        className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 text-white"
+                                        style={{ background: "var(--accent)" }}
+                                    >
+                                        <ActionIcon actionType={selectedAction} />
+                                    </div>
+                                    <div className="flex-1">
+                                        <div className="text-[10px] font-extrabold uppercase tracking-wide" style={{ color: "var(--accent)" }}>
+                                            {selectedAction === "parked" ? "I just parked at" : selectedAction === "leaving" ? "I'm leaving" : "Checking"}
+                                        </div>
+                                        <div className="text-[18px] font-extrabold leading-tight" style={{ color: "var(--foreground)" }}>
+                                            {activeLotName}
+                                        </div>
+                                    </div>
+                                    <div className="px-2.5 py-1 rounded-full text-xs font-extrabold flex-shrink-0" style={{ background: "var(--accent-soft)", color: "var(--accent)" }}>
+                                        {selectedAction === "observing" ? "+1" : "+5"}
+                                    </div>
+                                </div>
+
+                                <form onSubmit={handleReportSubmit}>
+                                    <div className="text-[13px] font-semibold mb-2" style={{ color: "var(--muted)" }}>How full is it now?</div>
+
+                                    <div className="grid grid-cols-5 gap-2 mb-3">
+                                        {[1,2,3,4,5].map((level) => {
+                                            const isSel = fullnessLevel === level;
+                                            const barColor = level <= 2 ? "#10b981" : level <= 3 ? "#f59e0b" : "#dc2626";
+                                            return (
+                                                <button
+                                                    key={level}
+                                                    type="button"
+                                                    onClick={() => setFullnessLevel(level)}
+                                                    className="py-3.5 rounded-[14px] flex flex-col items-center gap-1.5 transition-all"
+                                                    style={{
+                                                        background: isSel ? barColor : "transparent",
+                                                        border: `2px solid ${isSel ? barColor : "var(--line)"}`,
+                                                        transform: isSel ? "translateY(-2px)" : "none",
+                                                    }}
+                                                    aria-label={`Fullness level ${level}`}
+                                                >
+                                                    <FullnessIcon level={level} selected={isSel} />
+                                                    <span className="text-[11px] font-extrabold" style={{ color: isSel ? "#fff" : "var(--foreground)" }}>
+                                                        {level}/5
+                                                    </span>
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+
+                                    {fullnessLevel && (
+                                        <div
+                                            className="flex items-center justify-between px-3 py-2.5 rounded-xl mb-3"
+                                            style={{ background: "var(--surface-strong)", border: "1px solid var(--line)" }}
+                                        >
+                                            <span className="text-[13px] font-semibold" style={{ color: "var(--muted)" }}>
+                                                {FULLNESS_DESCRIPTIONS[fullnessLevel]}
+                                            </span>
+                                            <span className="text-xs font-extrabold ml-2 flex-shrink-0" style={{ color: fullnessLevel <= 2 ? "#10b981" : fullnessLevel <= 3 ? "#f59e0b" : "#dc2626" }}>
+                                                {Math.max(0, 100 - fullnessLevel * 18)}% open
+                                            </span>
+                                        </div>
+                                    )}
+
+                                    {reportFeedback && (
+                                        <p className="text-xs font-medium mb-3" style={{ color: reportFeedback.includes("saved") ? "var(--accent)" : "#ef4444" }}>
+                                            {reportFeedback}
+                                        </p>
+                                    )}
+
+                                    <button
+                                        type="submit"
+                                        disabled={!canSubmitReport}
+                                        className="w-full py-4 rounded-2xl text-[16px] font-extrabold flex items-center justify-center gap-2 transition disabled:cursor-not-allowed"
+                                        style={{
+                                            background: canSubmitReport ? "var(--accent)" : "var(--line)",
+                                            color: canSubmitReport ? "#fff" : "var(--muted)",
+                                            boxShadow: canSubmitReport ? "0 6px 18px rgba(34,211,194,0.22)" : "none",
+                                        }}
+                                    >
+                                        <CheckIcon />
+                                        {isSubmittingReport ? "Submitting..." : "Submit report"}
+                                    </button>
+                                    <p className="text-center text-[11px] mt-2.5 font-semibold" style={{ color: "var(--muted)" }}>
+                                        Anonymous · helps everyone find a spot
+                                    </p>
+                                </form>
+                            </div>
+                        )}
                     </div>
                 </div>
-            ) : null}
+            )}
 
             {/* Modals */}
             {showDashboard && (
@@ -2491,53 +2396,24 @@ const latestTransitionFrameRef = useRef<number | null>(null);
                     onSettingsClick={() => setShowSettings(true)}
                     onLeaderboardClick={() => setShowLeaderboard(true)}
                     onClose={() => setShowDashboard(false)}
-                    onPremiumStatusChange={(status) => {
-                        applyPremiumStatus(status);
-                    }}
+                    onPremiumStatusChange={(status) => { applyPremiumStatus(status); }}
+                    streakDays={streakDays}
                 />
             )}
 
             {showSettings && <SettingsModal session={session} onClose={() => setShowSettings(false)} />}
-
             {showLeaderboard && <LeaderboardModal session={session} onClose={() => setShowLeaderboard(false)} />}
 
             <style jsx>{`
                 @keyframes slideUp {
-                    from {
-                        transform: translateY(100%);
-                    }
-                    to {
-                        transform: translateY(0);
-                    }
+                    from { transform: translateY(100%); }
+                    to { transform: translateY(0); }
                 }
-
                 @keyframes jac-user-location-pulse {
-                    0% {
-                        box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.5);
-                    }
-                    70% {
-                        box-shadow: 0 0 0 14px rgba(37, 99, 235, 0);
-                    }
-                    100% {
-                        box-shadow: 0 0 0 0 rgba(37, 99, 235, 0);
-                    }
+                    0% { box-shadow: 0 0 0 0 rgba(37,99,235,0.5); }
+                    70% { box-shadow: 0 0 0 14px rgba(37,99,235,0); }
+                    100% { box-shadow: 0 0 0 0 rgba(37,99,235,0); }
                 }
-
-                @keyframes jac-action-button-in {
-                    0% {
-                        opacity: 0;
-                        transform: translateY(24px) scale(0.94);
-                    }
-                    70% {
-                        opacity: 1;
-                        transform: translateY(-2px) scale(1.01);
-                    }
-                    100% {
-                        opacity: 1;
-                        transform: translateY(0) scale(1);
-                    }
-                }
-
                 :global(.jac-user-location-marker) {
                     width: 18px;
                     height: 18px;
@@ -2545,6 +2421,21 @@ const latestTransitionFrameRef = useRef<number | null>(null);
                     border: 2px solid #ffffff;
                     background: #2563eb;
                     animation: jac-user-location-pulse 1.6s ease-out infinite;
+                }
+                :global(.jac-parked-car-pin) {
+                    width: 34px;
+                    height: 34px;
+                    border-radius: 50% 50% 50% 0;
+                    background: #22d3c2;
+                    border: 2px solid white;
+                    box-shadow: 0 2px 10px rgba(0,0,0,0.35);
+                    transform: rotate(-45deg);
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                }
+                :global(.jac-parked-car-pin svg) {
+                    transform: rotate(45deg);
                 }
             `}</style>
         </section>

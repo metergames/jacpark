@@ -16,178 +16,248 @@ interface LeaderboardModalProps {
     onClose: () => void;
 }
 
+const MEDAL_COLORS: Record<number, string> = {
+    1: "#f4b942",
+    2: "#9aa6ad",
+    3: "#cd8a5e",
+};
+
 export default function LeaderboardModal({ session, onClose }: LeaderboardModalProps) {
     const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
     const [userRank, setUserRank] = useState<{ rank: number; points: number } | null>(null);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const [activeTab, setActiveTab] = useState<"week" | "month" | "all">("week");
 
     useEffect(() => {
-        const loadLeaderboard = async () => {
+        const load = async () => {
             setIsLoading(true);
             setError(null);
-
             try {
-                // Fetch leaderboard data
-                const leaderboardData = await fetchLeaderboard(10);
-                setLeaderboard(leaderboardData);
-
-                // Fetch user rank if logged in
-                if (session?.user?.id) {
-                    const rank = await getUserRank(session.user.id);
-                    setUserRank(rank);
-                }
-            } catch (err) {
-                console.error("Error loading leaderboard:", err);
-                setError("Failed to load leaderboard. Please try again later.");
+                const [data, rank] = await Promise.all([
+                    fetchLeaderboard(10),
+                    session?.user?.id ? getUserRank(session.user.id) : Promise.resolve(null),
+                ]);
+                setLeaderboard(data);
+                setUserRank(rank);
+            } catch {
+                setError("Failed to load leaderboard.");
             } finally {
                 setIsLoading(false);
             }
         };
-
-        loadLeaderboard();
+        void load();
     }, [session?.user?.id]);
 
+    const top3 = leaderboard.slice(0, 3);
+    const rest = leaderboard.slice(3);
+
+    const podiumOrder = [
+        top3.find((p) => p.rank === 2) ?? null,
+        top3.find((p) => p.rank === 1) ?? null,
+        top3.find((p) => p.rank === 3) ?? null,
+    ];
+
+    const podiumHeights = [72, 100, 56];
+
+    const userName =
+        session?.user?.user_metadata?.full_name || session?.user?.email?.split("@")[0] || "You";
+
     return (
-        <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-            <div className="max-h-[90dvh] w-full max-w-md overflow-auto rounded-2xl shadow-xl p-6 backdrop-blur-sm" style={{
-                backgroundColor: "var(--surface)",
-                borderColor: "var(--line)",
-                borderWidth: "1px",
-                color: "var(--foreground)",
-            }}>
+        <div
+            className="fixed inset-0 z-30 overflow-auto md:hidden"
+            style={{ backgroundColor: "var(--background)", color: "var(--foreground)" }}
+        >
+            <div style={{ paddingBottom: "2.5rem" }}>
                 {/* Header */}
-                <div className="mb-6 flex items-center justify-between">
-                    <div>
-                        <h2 className="text-lg font-semibold">🏆 Leaderboard</h2>
-                        <p className="text-xs mt-1" style={{ color: "var(--muted)" }}>Top parking reporters</p>
-                    </div>
+                <div
+                    className="flex items-center gap-3 px-5"
+                    style={{ paddingTop: "calc(3.5rem + max(0px, env(safe-area-inset-top)))", paddingBottom: "1rem" }}
+                >
                     <button
                         onClick={onClose}
-                        className="rounded-lg p-1 transition"
-                        style={{ color: "var(--muted)" }}
-                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = "var(--surface-strong)"}
-                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = "transparent"}
+                        className="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0"
+                        style={{ backgroundColor: "var(--surface)", border: "1px solid var(--line)" }}
+                        aria-label="Back"
                     >
-                        ✕
+                        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                            <path d="M15 6l-6 6 6 6" />
+                        </svg>
                     </button>
+                    <div>
+                        <div className="text-[22px] font-extrabold tracking-tight">Leaderboard</div>
+                        <div className="text-[11px] font-semibold" style={{ color: "var(--muted)" }}>
+                            {isLoading ? "Loading..." : `${leaderboard.length} reporters`}
+                        </div>
+                    </div>
                 </div>
 
-                {/* Your Rank Card */}
-                {session?.user && (
-                    <div className="mb-6 rounded-lg p-4" style={{
-                        background: "linear-gradient(135deg, rgba(59, 130, 246, 0.15), rgba(34, 211, 238, 0.15))",
-                        borderColor: "rgba(59, 130, 246, 0.3)",
-                        borderWidth: "1px",
-                    }}>
-                        <p className="text-xs mb-2" style={{ color: "var(--muted)" }}>Your Rank</p>
-                        <div className="flex items-center justify-between">
-                            <div>
-                                <p className="text-lg font-bold text-blue-500">#{userRank?.rank || "—"}</p>
-                                <p className="text-xs mt-1" style={{ color: "var(--muted)" }}>{userRank?.points || 0} points</p>
+                {/* Tabs */}
+                <div className="px-5 mb-4">
+                    <div
+                        className="flex gap-1 p-1 rounded-xl"
+                        style={{ backgroundColor: "var(--surface)", border: "1px solid var(--line)" }}
+                    >
+                        {(["week", "month", "all"] as const).map((tab, i) => (
+                            <button
+                                key={tab}
+                                onClick={() => setActiveTab(tab)}
+                                className="flex-1 py-2 rounded-[10px] text-xs font-extrabold transition"
+                                style={{
+                                    backgroundColor: activeTab === tab ? "var(--accent)" : "transparent",
+                                    color: activeTab === tab ? "#fff" : "var(--muted)",
+                                    border: "none",
+                                }}
+                            >
+                                {["Week", "Month", "All-time"][i]}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+
+                {/* Your rank */}
+                {session?.user && userRank && (
+                    <div className="px-5 mb-4">
+                        <div
+                            className="flex items-center gap-3 p-3 rounded-[14px]"
+                            style={{
+                                background: "linear-gradient(135deg, rgba(34,211,194,0.12), rgba(34,211,194,0.04))",
+                                border: "1px solid rgba(34,211,194,0.25)",
+                            }}
+                        >
+                            <div
+                                className="w-8 h-8 rounded-full flex items-center justify-center font-extrabold text-sm text-white flex-shrink-0"
+                                style={{ background: "var(--accent)" }}
+                            >
+                                {userName.charAt(0).toUpperCase()}
                             </div>
-                            <div className="text-right">
-                                <p className="text-sm font-semibold">
-                                    {session.user.user_metadata?.full_name || session.user.email?.split("@")[0]}
-                                </p>
+                            <div className="flex-1">
+                                <div className="text-[13px] font-extrabold">{userName}</div>
+                                <div className="text-[11px]" style={{ color: "var(--muted)" }}>
+                                    {userRank.points} pts
+                                </div>
+                            </div>
+                            <div className="text-[18px] font-extrabold" style={{ color: "var(--accent)", fontFamily: "var(--font-geist-mono, monospace)" }}>
+                                #{userRank.rank}
                             </div>
                         </div>
                     </div>
                 )}
 
-                {/* Loading State */}
                 {isLoading && (
-                    <div className="flex items-center justify-center py-12">
-                        <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500" />
+                    <div className="flex justify-center py-12">
+                        <div className="h-8 w-8 rounded-full border-b-2 animate-spin" style={{ borderColor: "var(--accent)" }} />
                     </div>
                 )}
 
-                {/* Error State */}
-                {error && (
-                    <div className="mb-6 rounded-lg p-4" style={{
-                        background: "rgba(239, 68, 68, 0.15)",
-                        borderColor: "rgba(239, 68, 68, 0.3)",
-                        borderWidth: "1px",
-                    }}>
+                {error && !isLoading && (
+                    <div className="mx-5 p-4 rounded-xl" style={{ background: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.25)" }}>
                         <p className="text-sm text-red-500">{error}</p>
                     </div>
                 )}
 
-                {/* Leaderboard List */}
-                {!isLoading && !error && (
-                    <div className="space-y-2">
-                        {leaderboard.length === 0 ? (
-                            <p className="text-center text-sm py-8" style={{ color: "var(--muted)" }}>
-                                No leaderboard data yet. Be the first to report!
-                            </p>
-                        ) : (
-                            leaderboard.map((entry) => {
-                                let bgColor = "var(--surface-strong)";
-                                let borderColor = "var(--line)";
-                                
-                                if (userRank?.rank === entry.rank) {
-                                    bgColor = "rgba(59, 130, 246, 0.15)";
-                                    borderColor = "rgba(59, 130, 246, 0.3)";
-                                } else if (entry.rank === 1) {
-                                    bgColor = "rgba(234, 179, 8, 0.15)";
-                                    borderColor = "rgba(234, 179, 8, 0.3)";
-                                } else if (entry.rank === 2) {
-                                    bgColor = "rgba(107, 114, 128, 0.15)";
-                                    borderColor = "rgba(107, 114, 128, 0.3)";
-                                } else if (entry.rank === 3) {
-                                    bgColor = "rgba(249, 115, 22, 0.15)";
-                                    borderColor = "rgba(249, 115, 22, 0.3)";
-                                }
+                {!isLoading && !error && leaderboard.length === 0 && (
+                    <p className="text-center text-sm py-12" style={{ color: "var(--muted)" }}>
+                        No leaderboard data yet. Be the first to report!
+                    </p>
+                )}
 
-                                return (
+                {/* Podium */}
+                {!isLoading && !error && top3.length >= 1 && (
+                    <div className="flex items-end gap-2 justify-center px-5 mb-4" style={{ paddingTop: "4px" }}>
+                        {podiumOrder.map((player, i) => {
+                            if (!player) return <div key={i} className="flex-1" />;
+                            const rank = player.rank as number;
+                            const medal = MEDAL_COLORS[rank] ?? "#9aa6ad";
+                            const h = podiumHeights[i] as number;
+                            const isCenter = i === 1;
+                            const avatarSize = isCenter ? 52 : 42;
+
+                            return (
+                                <div key={rank} className="flex-1 flex flex-col items-center">
                                     <div
-                                        key={entry.id}
-                                        className="rounded-lg p-3 transition"
+                                        className="rounded-full flex items-center justify-center font-extrabold text-white mb-1.5"
                                         style={{
-                                            backgroundColor: bgColor,
-                                            borderColor: borderColor,
-                                            borderWidth: "1px",
+                                            width: avatarSize,
+                                            height: avatarSize,
+                                            background: medal,
+                                            fontSize: isCenter ? 18 : 14,
+                                            boxShadow: `0 0 0 3px var(--background), 0 0 0 5px ${medal}`,
                                         }}
                                     >
-                                        <div className="flex items-center gap-3">
-                                            {/* Rank */}
-                                            <div className="w-8 text-center">
-                                                <span className="text-lg font-bold">
-                                                    {entry.rank === 1 ? "🥇" : entry.rank === 2 ? "🥈" : entry.rank === 3 ? "🥉" : `#${entry.rank}`}
-                                                </span>
-                                            </div>
-
-                                            {/* Name and Points */}
-                                            <div className="flex-1">
-                                                <p className="text-sm font-semibold">{entry.full_name}</p>
-                                                <p className="text-xs" style={{ color: "var(--muted)" }}>{entry.points} points</p>
-                                            </div>
-
-                                            {/* Points Badge */}
-                                            <div className="rounded-full px-2.5 py-1 text-xs font-bold" style={{
-                                                backgroundColor: "var(--surface-strong)",
-                                                color: "var(--foreground)",
-                                            }}>
-                                                {entry.points}
-                                            </div>
-                                        </div>
+                                        {player.full_name.charAt(0).toUpperCase()}
                                     </div>
-                                );
-                            })
-                        )}
+                                    <div
+                                        className="text-[11px] font-extrabold text-center mb-1 max-w-[88px] overflow-hidden"
+                                        style={{ textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--foreground)" }}
+                                    >
+                                        {player.full_name}
+                                    </div>
+                                    <div
+                                        className="text-[11px] font-bold mb-1.5"
+                                        style={{ color: "var(--muted)", fontFamily: "var(--font-geist-mono, monospace)" }}
+                                    >
+                                        {player.points} pts
+                                    </div>
+                                    <div
+                                        className="w-full rounded-t-xl flex items-start justify-center pt-1.5 text-base font-extrabold"
+                                        style={{
+                                            height: h,
+                                            background: `linear-gradient(180deg, ${medal}66, ${medal}18)`,
+                                            border: `1px solid ${medal}44`,
+                                            borderBottom: "none",
+                                            color: medal,
+                                        }}
+                                    >
+                                        {rank}
+                                    </div>
+                                </div>
+                            );
+                        })}
                     </div>
                 )}
 
-                {/* Footer */}
-                <div className="mt-6 rounded-lg p-3" style={{
-                    background: "rgba(59, 130, 246, 0.15)",
-                    borderColor: "rgba(59, 130, 246, 0.3)",
-                    borderWidth: "1px",
-                }}>
-                    <p className="text-xs">
-                        <span className="font-semibold">💡 Tip:</span> <span style={{ color: "var(--muted)" }}>Earn points by submitting accurate parking updates!</span>
-                    </p>
-                </div>
+                {/* Rest of list */}
+                {!isLoading && !error && rest.length > 0 && (
+                    <div className="px-3 space-y-1.5">
+                        {rest.map((entry) => {
+                            const isYou = entry.id === session?.user?.id;
+                            return (
+                                <div
+                                    key={entry.id}
+                                    className="flex items-center gap-3 p-3 rounded-[14px]"
+                                    style={{
+                                        backgroundColor: isYou ? "rgba(34,211,194,0.1)" : "var(--surface)",
+                                        border: `1px solid ${isYou ? "rgba(34,211,194,0.25)" : "var(--line)"}`,
+                                    }}
+                                >
+                                    <div
+                                        className="text-xs font-extrabold text-center w-7 flex-shrink-0"
+                                        style={{ color: "var(--muted)", fontFamily: "var(--font-geist-mono, monospace)" }}
+                                    >
+                                        #{entry.rank}
+                                    </div>
+                                    <div
+                                        className="w-[34px] h-[34px] rounded-full flex-shrink-0 flex items-center justify-center font-bold text-sm"
+                                        style={{
+                                            backgroundColor: isYou ? "var(--accent)" : "var(--surface-strong)",
+                                            color: isYou ? "#fff" : "var(--muted)",
+                                        }}
+                                    >
+                                        {entry.full_name.charAt(0).toUpperCase()}
+                                    </div>
+                                    <div className="flex-1 text-[14px] font-bold truncate">{entry.full_name}</div>
+                                    <div
+                                        className="text-[13px] font-extrabold flex-shrink-0"
+                                        style={{ color: "var(--foreground)", fontFamily: "var(--font-geist-mono, monospace)" }}
+                                    >
+                                        {entry.points}
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                )}
             </div>
         </div>
     );

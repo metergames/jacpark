@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { getUserRank } from "../lib/leaderboard";
 import { getSupabaseBrowserClient } from "../lib/supabaseBrowser";
+import { computeAchievements, computeDistinctLots, computeLevel } from "../lib/gamification";
 
 export type PremiumStatus = {
     points: number;
@@ -25,7 +26,41 @@ interface UserDashboardProps {
     onLeaderboardClick: () => void;
     onClose: () => void;
     onPremiumStatusChange?: (status: PremiumStatus) => void;
+    streakDays?: number;
 }
+
+const ChevronRightIcon = () => (
+    <svg viewBox="0 0 24 24" className="h-4 w-4 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M9 6l6 6-6 6" />
+    </svg>
+);
+
+const CrownIcon = () => (
+    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M3 8l4 4 5-7 5 7 4-4-2 11H5L3 8z" />
+    </svg>
+);
+
+const PinIcon = () => (
+    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M12 22s7-7.5 7-13a7 7 0 1 0-14 0c0 5.5 7 13 7 13z" />
+        <circle cx="12" cy="9" r="2.5" />
+    </svg>
+);
+
+const TrophyIcon = () => (
+    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 1 1-10 0V4z" />
+        <path d="M17 6h2a2 2 0 0 1 0 4h-2M7 6H5a2 2 0 0 0 0 4h2" />
+    </svg>
+);
+
+const GearIcon = () => (
+    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="12" cy="12" r="3" />
+        <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h0a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v0a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" />
+    </svg>
+);
 
 export default function UserDashboard({
     session,
@@ -35,10 +70,12 @@ export default function UserDashboard({
     onLeaderboardClick,
     onClose,
     onPremiumStatusChange,
+    streakDays = 0,
 }: UserDashboardProps) {
     const [userPoints, setUserPoints] = useState<number>(0);
     const [userRank, setUserRank] = useState<number | null>(null);
     const [userReports, setUserReports] = useState<number>(0);
+    const [distinctLots, setDistinctLots] = useState<number>(0);
     const [premiumExpiresAt, setPremiumExpiresAt] = useState<string | null>(null);
     const [premiumMonthCostPoints, setPremiumMonthCostPoints] = useState<number>(60);
     const [hasSavedCar, setHasSavedCar] = useState<boolean>(false);
@@ -46,36 +83,24 @@ export default function UserDashboard({
     const [isBuyingPremium, setIsBuyingPremium] = useState<boolean>(false);
 
     const isPremiumActive = useMemo(() => {
-        if (!premiumExpiresAt) {
-            return false;
-        }
-
+        if (!premiumExpiresAt) return false;
         const expiresMs = Date.parse(premiumExpiresAt);
-
-        if (Number.isNaN(expiresMs)) {
-            return false;
-        }
-
-        return expiresMs > Date.now();
+        return !Number.isNaN(expiresMs) && expiresMs > Date.now();
     }, [premiumExpiresAt]);
 
     const formattedPremiumExpiry = useMemo(() => {
-        if (!premiumExpiresAt) {
-            return "";
-        }
-
-        const parsedDate = new Date(premiumExpiresAt);
-
-        if (Number.isNaN(parsedDate.getTime())) {
-            return "";
-        }
-
-        return parsedDate.toLocaleDateString([], {
-            month: "short",
-            day: "numeric",
-            year: "numeric",
-        });
+        if (!premiumExpiresAt) return "";
+        const d = new Date(premiumExpiresAt);
+        if (Number.isNaN(d.getTime())) return "";
+        return d.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
     }, [premiumExpiresAt]);
+
+    const levelData = useMemo(() => computeLevel(userPoints), [userPoints]);
+
+    const achievements = useMemo(
+        () => computeAchievements({ totalReports: userReports, streakDays, rank: userRank, distinctLots }),
+        [userReports, streakDays, userRank, distinctLots],
+    );
 
     const applyPremiumStatus = useCallback(
         (status: PremiumStatus): void => {
@@ -92,17 +117,10 @@ export default function UserDashboard({
         const response = await fetch("/api/premium", {
             method: "GET",
             cache: "no-store",
-            headers: {
-                authorization: `Bearer ${accessToken}`,
-            },
+            headers: { authorization: `Bearer ${accessToken}` },
         });
-
         const payload = (await response.json().catch(() => ({}))) as Partial<PremiumStatus> & { error?: string };
-
-        if (!response.ok) {
-            throw new Error(payload.error ?? "Unable to load premium status.");
-        }
-
+        if (!response.ok) throw new Error(payload.error ?? "Unable to load premium status.");
         return {
             points: Number.isFinite(payload.points) ? Number(payload.points) : 0,
             premiumExpiresAt: typeof payload.premiumExpiresAt === "string" ? payload.premiumExpiresAt : null,
@@ -119,15 +137,16 @@ export default function UserDashboard({
     }, []);
 
     useEffect(() => {
-        if (!session?.user?.id || !session.access_token) {
-            return;
-        }
-
+        if (!session?.user?.id || !session.access_token) return;
         let isActive = true;
 
-        const loadProfileStats = async () => {
+        const load = async () => {
             try {
-                const rankData = await getUserRank(session.user.id);
+                const [rankData, premiumStatus, lotsCount] = await Promise.all([
+                    getUserRank(session.user.id),
+                    loadPremiumStatus(session.access_token).catch(() => null),
+                    computeDistinctLots(session.user.id),
+                ]);
 
                 const supabase = getSupabaseBrowserClient();
                 const { count } = await supabase
@@ -135,89 +154,50 @@ export default function UserDashboard({
                     .select("id", { count: "exact", head: true })
                     .eq("user_id", session.user.id);
 
-                let premiumStatus: PremiumStatus | null = null;
-
-                try {
-                    premiumStatus = await loadPremiumStatus(session.access_token);
-                } catch {
-                    premiumStatus = null;
-                }
-
-                if (!isActive) {
-                    return;
-                }
+                if (!isActive) return;
 
                 setUserPoints(rankData?.points ?? 0);
                 setUserRank(rankData?.rank ?? null);
                 setUserReports(count ?? 0);
-
-                if (premiumStatus) {
-                    applyPremiumStatus(premiumStatus);
-                }
+                setDistinctLots(lotsCount);
+                if (premiumStatus) applyPremiumStatus(premiumStatus);
             } catch {
-                if (!isActive) {
-                    return;
-                }
-
+                if (!isActive) return;
                 setUserPoints(0);
                 setUserRank(null);
                 setUserReports(0);
-                setPremiumExpiresAt(null);
-                setHasSavedCar(false);
             }
         };
 
-        void loadProfileStats();
-
-        return () => {
-            isActive = false;
-        };
+        void load();
+        return () => { isActive = false; };
     }, [session?.user?.id, session?.access_token, applyPremiumStatus, loadPremiumStatus]);
 
     const handlePurchasePremium = useCallback(async (): Promise<void> => {
-        if (!session?.access_token || isBuyingPremium) {
-            return;
-        }
-
+        if (!session?.access_token || isBuyingPremium) return;
         setIsBuyingPremium(true);
         setPremiumFeedback("");
-
         try {
             const response = await fetch("/api/premium", {
                 method: "POST",
                 cache: "no-store",
-                headers: {
-                    "content-type": "application/json",
-                    authorization: `Bearer ${session.access_token}`,
-                },
+                headers: { "content-type": "application/json", authorization: `Bearer ${session.access_token}` },
                 body: JSON.stringify({ months: 1 }),
             });
-
             const payload = (await response.json().catch(() => ({}))) as Partial<PremiumStatus> & { error?: string };
-
             if (!response.ok) {
                 setPremiumFeedback(payload.error ?? "Unable to purchase premium.");
                 return;
             }
-
-            const premiumStatus: PremiumStatus = {
+            const status: PremiumStatus = {
                 points: Number.isFinite(payload.points) ? Number(payload.points) : userPoints,
                 premiumExpiresAt: typeof payload.premiumExpiresAt === "string" ? payload.premiumExpiresAt : premiumExpiresAt,
                 isPremium: Boolean(payload.isPremium),
-                premiumMonthCostPoints: Number.isFinite(payload.premiumMonthCostPoints)
-                    ? Number(payload.premiumMonthCostPoints)
-                    : premiumMonthCostPoints,
-                parkedCarLocation:
-                    payload.parkedCarLocation &&
-                    typeof payload.parkedCarLocation.latitude === "number" &&
-                    typeof payload.parkedCarLocation.longitude === "number" &&
-                    typeof payload.parkedCarLocation.parkedAt === "string"
-                        ? payload.parkedCarLocation
-                        : null,
+                premiumMonthCostPoints: Number.isFinite(payload.premiumMonthCostPoints) ? Number(payload.premiumMonthCostPoints) : premiumMonthCostPoints,
+                parkedCarLocation: null,
             };
-
-            applyPremiumStatus(premiumStatus);
-            setPremiumFeedback(premiumStatus.isPremium ? "Premium time added successfully." : "Premium updated.");
+            applyPremiumStatus(status);
+            setPremiumFeedback(status.isPremium ? "Premium activated!" : "Premium updated.");
         } catch {
             setPremiumFeedback("Unable to purchase premium.");
         } finally {
@@ -225,194 +205,246 @@ export default function UserDashboard({
         }
     }, [session?.access_token, isBuyingPremium, applyPremiumStatus, userPoints, premiumExpiresAt, premiumMonthCostPoints]);
 
-    if (!session?.user) {
-        return null;
-    }
+    if (!session?.user) return null;
 
     const userName =
         typeof session.user.user_metadata?.full_name === "string"
             ? session.user.user_metadata.full_name
-            : session.user.email?.split("@")[0] || "User";
+            : session.user.email?.split("@")[0] ?? "User";
+
+    const initial = userName.charAt(0).toUpperCase();
 
     return (
-        <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 sm:absolute sm:inset-auto sm:top-3 sm:right-3 sm:z-10 sm:bg-transparent sm:backdrop-blur-none sm:p-0">
-            <div
-                className="w-full max-h-[90dvh] sm:max-h-none sm:w-auto rounded-2xl sm:rounded-2xl shadow-xl p-4 sm:p-4 backdrop-blur-sm overflow-auto"
-                style={{
-                    backgroundColor: "var(--surface)",
-                    borderColor: "var(--line)",
-                    borderWidth: "1px",
-                    color: "var(--foreground)",
-                }}
-            >
-                {/* Header with close button */}
-                <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-lg sm:text-sm font-semibold" style={{ color: "var(--foreground)" }}>
-                        Profile
-                    </h3>
-                    <button onClick={onClose} className="transition text-2xl sm:text-base" style={{ color: "var(--muted)" }}>
-                        ✕
+        <div
+            className="fixed inset-0 z-30 overflow-auto md:hidden"
+            style={{ backgroundColor: "var(--background)", color: "var(--foreground)" }}
+        >
+            <div className="px-5" style={{ paddingTop: "calc(3.5rem + max(0px, env(safe-area-inset-top)))", paddingBottom: "2.5rem" }}>
+                {/* Header */}
+                <div className="flex items-center justify-between mb-5">
+                    <div className="text-[26px] font-extrabold tracking-tight">You</div>
+                    <button
+                        onClick={onClose}
+                        className="w-9 h-9 rounded-full flex items-center justify-center"
+                        style={{ backgroundColor: "var(--surface)", border: "1px solid var(--line)" }}
+                        aria-label="Close profile"
+                    >
+                        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                            <path d="M6 6l12 12M18 6L6 18" />
+                        </svg>
                     </button>
                 </div>
 
-                {/* User info */}
-                <div className="mb-4 pb-4" style={{ borderBottomColor: "var(--line)", borderBottomWidth: "1px" }}>
-                    <h4 className="font-semibold text-base sm:text-sm" style={{ color: "var(--foreground)" }}>
-                        {userName}
-                    </h4>
-                    <p className="text-xs sm:text-xs" style={{ color: "var(--muted)" }}>
-                        {session.user.email}
-                    </p>
+                {/* User identity */}
+                <div className="flex items-center gap-3.5 mb-4">
+                    <div
+                        className="w-[60px] h-[60px] rounded-full flex items-center justify-center font-extrabold text-2xl text-white flex-shrink-0"
+                        style={{ background: "linear-gradient(135deg, var(--accent), #5b8df7)" }}
+                    >
+                        {initial}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                        <div className="text-[18px] font-extrabold truncate">{userName}</div>
+                        <div className="text-xs mt-0.5" style={{ color: "var(--muted)" }}>
+                            Level {levelData.level} · {levelData.title}
+                        </div>
+                    </div>
+                    {isPremiumActive && (
+                        <div
+                            className="px-2.5 py-1 rounded-full text-[11px] font-extrabold flex-shrink-0"
+                            style={{ background: "var(--accent)", color: "#fff" }}
+                        >
+                            PRO
+                        </div>
+                    )}
                 </div>
 
-                {/* Points card */}
+                {/* Level progress */}
+                <div className="mb-4">
+                    <div className="flex justify-between text-[11px] font-bold mb-1.5" style={{ color: "var(--muted)" }}>
+                        <span>Lv {levelData.level}</span>
+                        <span style={{ fontFamily: "var(--font-geist-mono, monospace)" }}>
+                            {userPoints} / {levelData.nextPts} → Lv {levelData.level + 1}
+                        </span>
+                    </div>
+                    <div className="h-2 rounded-full overflow-hidden" style={{ backgroundColor: "var(--line)" }}>
+                        <div
+                            className="h-full rounded-full transition-all duration-500"
+                            style={{
+                                width: `${Math.round(levelData.progress * 100)}%`,
+                                background: "linear-gradient(90deg, var(--accent), #5b8df7)",
+                            }}
+                        />
+                    </div>
+                </div>
+
+                {/* 3-stat row */}
+                <div className="grid grid-cols-3 gap-2 mb-3.5">
+                    {[
+                        { label: "Points", value: String(userPoints), color: "var(--accent)", mono: true },
+                        { label: "Streak", value: `${streakDays}d`, color: "var(--streak)" },
+                        { label: "Rank", value: userRank ? `#${userRank}` : "—", color: "#10b981" },
+                    ].map((s) => (
+                        <div
+                            key={s.label}
+                            className="py-3 px-2.5 rounded-[14px]"
+                            style={{ backgroundColor: "var(--surface)", border: "1px solid var(--line)" }}
+                        >
+                            <div className="text-[10px] font-bold mb-1" style={{ color: "var(--muted)" }}>{s.label}</div>
+                            <div
+                                className="text-xl font-extrabold"
+                                style={{
+                                    color: s.color,
+                                    fontFamily: s.mono ? "var(--font-geist-mono, monospace)" : undefined,
+                                }}
+                            >
+                                {s.value}
+                            </div>
+                        </div>
+                    ))}
+                </div>
+
+                {/* Premium card */}
                 <div
-                    className="rounded-lg p-4 mb-4"
+                    className="p-3.5 rounded-2xl mb-3.5"
                     style={{
-                        background: "linear-gradient(135deg, rgba(34, 197, 94, 0.2), rgba(5, 150, 105, 0.2))",
-                        borderColor: "rgba(34, 197, 94, 0.4)",
-                        borderWidth: "1px",
+                        background: isPremiumActive
+                            ? "linear-gradient(135deg, rgba(34,211,194,0.14), rgba(34,211,194,0.04))"
+                            : "var(--surface)",
+                        border: `1px solid ${isPremiumActive ? "rgba(34,211,194,0.3)" : "var(--line)"}`,
                     }}
                 >
-                    <p className="text-xs mb-1" style={{ color: "var(--muted)" }}>
-                        Your Points
-                    </p>
-                    <p className="text-3xl sm:text-2xl font-bold text-green-500">{userPoints}</p>
-                    <p className="text-xs mt-2" style={{ color: "var(--muted)" }}>
-                        Earn points from reports
-                    </p>
-
-                    <div
-                        className="mt-3 rounded-lg p-3"
+                    <div className="flex items-center gap-2 mb-2" style={{ color: "var(--accent)" }}>
+                        <CrownIcon />
+                        <span className="text-[13px] font-extrabold">
+                            {isPremiumActive ? `Premium · until ${formattedPremiumExpiry || "soon"}` : "Premium"}
+                        </span>
+                    </div>
+                    <div className="text-[11px] mb-3" style={{ color: "var(--muted)" }}>
+                        {isPremiumActive
+                            ? "Live heatmap · report history · custom themes"
+                            : "Unlock detailed heatmap, report history, and Find My Car."}
+                    </div>
+                    <button
+                        onClick={() => { void handlePurchasePremium(); }}
+                        disabled={isBuyingPremium || userPoints < premiumMonthCostPoints}
+                        className="w-full py-2.5 rounded-xl text-[13px] font-extrabold transition disabled:cursor-not-allowed"
                         style={{
-                            background: isPremiumActive
-                                ? "linear-gradient(135deg, rgba(250, 204, 21, 0.22), rgba(245, 158, 11, 0.2))"
-                                : "rgba(15, 23, 42, 0.22)",
-                            borderColor: isPremiumActive ? "rgba(245, 158, 11, 0.42)" : "rgba(148, 163, 184, 0.36)",
-                            borderWidth: "1px",
+                            backgroundColor: isBuyingPremium || userPoints < premiumMonthCostPoints ? "var(--line)" : "var(--foreground)",
+                            color: isBuyingPremium || userPoints < premiumMonthCostPoints ? "var(--muted)" : "var(--background)",
+                            opacity: isBuyingPremium ? 0.7 : 1,
                         }}
                     >
-                        <p className="text-xs font-semibold" style={{ color: "var(--foreground)" }}>
-                            {isPremiumActive ? "Premium Active" : "Premium Locked"}
+                        {isBuyingPremium
+                            ? "Processing..."
+                            : `${isPremiumActive ? "Add" : "Buy"} 1 month · ${premiumMonthCostPoints} pts`}
+                    </button>
+                    {userPoints < premiumMonthCostPoints && (
+                        <p className="mt-1.5 text-[11px]" style={{ color: "var(--muted)" }}>
+                            Need {premiumMonthCostPoints - userPoints} more points.
                         </p>
-                        <p className="mt-1 text-xs" style={{ color: "var(--muted)" }}>
-                            {isPremiumActive ? `Expires ${formattedPremiumExpiry || "soon"}` : "Unlock heatmaps + Find My Car."}
+                    )}
+                    {premiumFeedback && (
+                        <p className="mt-1.5 text-[11px] font-semibold" style={{ color: "var(--foreground)" }}>
+                            {premiumFeedback}
                         </p>
-                        <button
-                            onClick={() => {
-                                void handlePurchasePremium();
-                            }}
-                            disabled={isBuyingPremium || userPoints < premiumMonthCostPoints}
-                            className="mt-2 w-full rounded-lg px-3 py-2 text-xs font-semibold transition"
-                            style={{
-                                backgroundColor:
-                                    isBuyingPremium || userPoints < premiumMonthCostPoints
-                                        ? "rgba(148, 163, 184, 0.34)"
-                                        : "rgba(15, 163, 127, 0.82)",
-                                color: "white",
-                                cursor: isBuyingPremium || userPoints < premiumMonthCostPoints ? "not-allowed" : "pointer",
-                                opacity: isBuyingPremium ? 0.75 : 1,
-                            }}
+                    )}
+                </div>
+
+                {/* Achievements */}
+                <div className="mb-3.5">
+                    <div className="flex justify-between items-center mb-2">
+                        <div className="text-[13px] font-extrabold">Achievements</div>
+                        <div className="text-[11px] font-bold" style={{ color: "var(--muted)", fontFamily: "var(--font-geist-mono, monospace)" }}>
+                            {achievements.filter((a) => a.earned).length} / {achievements.length}
+                        </div>
+                    </div>
+                    <div className="grid grid-cols-3 gap-1.5">
+                        {achievements.map((badge) => (
+                            <div
+                                key={badge.id}
+                                className="py-2.5 px-1.5 rounded-xl text-center"
+                                style={{
+                                    backgroundColor: badge.earned ? "var(--surface)" : "var(--surface-strong)",
+                                    border: `1px solid ${badge.earned ? "rgba(34,211,194,0.22)" : "var(--line)"}`,
+                                    opacity: badge.earned ? 1 : 0.45,
+                                }}
+                                title={badge.description}
+                            >
+                                <div
+                                    className="text-[22px] mb-1"
+                                    style={{ filter: badge.earned ? "none" : "grayscale(1)" }}
+                                >
+                                    {badge.emoji}
+                                </div>
+                                <div className="text-[10px] font-bold leading-tight" style={{ color: "var(--foreground)" }}>
+                                    {badge.name}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+
+                {/* Find My Car (premium only) */}
+                {isPremiumActive && (
+                    <div
+                        className="flex items-center gap-3 p-3 rounded-[14px] mb-2 cursor-pointer"
+                        style={{ backgroundColor: "var(--surface)", border: "1px solid var(--line)" }}
+                    >
+                        <div
+                            className="w-9 h-9 rounded-[10px] flex items-center justify-center flex-shrink-0"
+                            style={{ background: "var(--accent-soft)", color: "var(--accent)" }}
                         >
-                            {isBuyingPremium
-                                ? "Processing..."
-                                : `${isPremiumActive ? "Add" : "Buy"} 1 month (${premiumMonthCostPoints} points)`}
-                        </button>
-
-                        {userPoints < premiumMonthCostPoints ? (
-                            <p className="mt-2 text-[11px]" style={{ color: "var(--muted)" }}>
-                                Need {premiumMonthCostPoints - userPoints} more points.
-                            </p>
-                        ) : null}
-
-                        {hasSavedCar && isPremiumActive ? (
-                            <p className="mt-2 text-[11px] text-emerald-600">Find My Car is ready on the map.</p>
-                        ) : null}
-
-                        {premiumFeedback ? (
-                            <p className="mt-2 text-[11px] font-medium" style={{ color: "var(--foreground)" }}>
-                                {premiumFeedback}
-                            </p>
-                        ) : null}
+                            <PinIcon />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                            <div className="text-[14px] font-extrabold">Find My Car</div>
+                            <div className="text-xs" style={{ color: "var(--muted)" }}>
+                                {hasSavedCar ? "Saved location available on map" : "Park first to save your spot"}
+                            </div>
+                        </div>
+                        <ChevronRightIcon />
                     </div>
-                </div>
+                )}
 
-                {/* Stats */}
-                <div className="grid grid-cols-2 gap-2 mb-4">
+                {/* Nav rows */}
+                {[
+                    { icon: <TrophyIcon />, label: "Leaderboard", sub: userRank ? `Currently #${userRank}` : "See rankings", onClick: onLeaderboardClick },
+                    { icon: <GearIcon />, label: "Settings", sub: "Theme · push · account", onClick: onSettingsClick },
+                ].map((row) => (
                     <div
-                        className="rounded-lg p-3 sm:p-3 text-center"
-                        style={{
-                            background: "rgba(59, 130, 246, 0.15)",
-                            borderColor: "rgba(59, 130, 246, 0.3)",
-                            borderWidth: "1px",
-                        }}
+                        key={row.label}
+                        onClick={row.onClick}
+                        className="flex items-center gap-3 p-3 rounded-[14px] mb-2 cursor-pointer"
+                        style={{ backgroundColor: "var(--surface)", border: "1px solid var(--line)" }}
                     >
-                        <p className="text-xs" style={{ color: "var(--muted)" }}>
-                            Reports
-                        </p>
-                        <p className="text-2xl sm:text-lg font-semibold text-blue-500">{userReports}</p>
+                        <div
+                            className="w-9 h-9 rounded-[10px] flex items-center justify-center flex-shrink-0"
+                            style={{ backgroundColor: "var(--surface-strong)", color: "var(--foreground)" }}
+                        >
+                            {row.icon}
+                        </div>
+                        <div className="flex-1">
+                            <div className="text-[14px] font-extrabold">{row.label}</div>
+                            <div className="text-xs" style={{ color: "var(--muted)" }}>{row.sub}</div>
+                        </div>
+                        <ChevronRightIcon />
                     </div>
-                    <div
-                        className="rounded-lg p-3 sm:p-3 text-center"
-                        style={{
-                            background: "rgba(147, 51, 234, 0.15)",
-                            borderColor: "rgba(147, 51, 234, 0.3)",
-                            borderWidth: "1px",
-                        }}
-                    >
-                        <p className="text-xs" style={{ color: "var(--muted)" }}>
-                            Rank
-                        </p>
-                        <p className="text-2xl sm:text-lg font-semibold text-purple-500">{userRank ? `#${userRank}` : "—"}</p>
-                    </div>
-                </div>
+                ))}
 
-                {/* Action buttons */}
-                <div className="space-y-2">
-                    <button
-                        onClick={onLeaderboardClick}
-                        className="w-full px-4 py-3 sm:py-2 rounded-lg text-sm sm:text-sm font-medium transition"
-                        style={{
-                            borderColor: "var(--line)",
-                            borderWidth: "1px",
-                            color: "var(--foreground)",
-                            backgroundColor: "transparent",
-                        }}
-                        onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "var(--surface-strong)")}
-                        onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "transparent")}
-                    >
-                        🏆 Leaderboard
-                    </button>
-                    <button
-                        onClick={onSettingsClick}
-                        className="w-full px-4 py-3 sm:py-2 rounded-lg text-sm sm:text-sm font-medium transition"
-                        style={{
-                            borderColor: "var(--line)",
-                            borderWidth: "1px",
-                            color: "var(--foreground)",
-                            backgroundColor: "transparent",
-                        }}
-                        onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "var(--surface-strong)")}
-                        onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "transparent")}
-                    >
-                        ⚙️ Settings
-                    </button>
-                    <button
-                        onClick={onSignOut}
-                        disabled={isSigningOut}
-                        className="w-full px-4 py-3 sm:py-2 rounded-lg text-sm sm:text-sm font-medium transition"
-                        style={{
-                            background: "rgba(239, 68, 68, 0.15)",
-                            borderColor: "rgba(239, 68, 68, 0.3)",
-                            borderWidth: "1px",
-                            color: "#ef4444",
-                            opacity: isSigningOut ? 0.5 : 1,
-                            cursor: isSigningOut ? "not-allowed" : "pointer",
-                        }}
-                    >
-                        {isSigningOut ? "Signing out..." : "Sign Out"}
-                    </button>
-                </div>
+                {/* Sign out */}
+                <button
+                    onClick={() => { void onSignOut(); }}
+                    disabled={isSigningOut}
+                    className="w-full py-3 rounded-[14px] text-[14px] font-bold mt-3 transition disabled:opacity-50"
+                    style={{
+                        background: "transparent",
+                        border: "1px solid rgba(239,68,68,0.3)",
+                        color: "#ef4444",
+                    }}
+                >
+                    {isSigningOut ? "Signing out..." : "Sign out"}
+                </button>
             </div>
         </div>
     );
