@@ -4,6 +4,11 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { getSupabaseBrowserClient } from "../lib/supabase";
 
+const DEV_EMAIL = process.env.NEXT_PUBLIC_DEV_EMAIL;
+const DEV_PASSWORD = process.env.NEXT_PUBLIC_DEV_PASSWORD;
+const isDevBypassAvailable =
+    process.env.NODE_ENV === "development" && Boolean(DEV_EMAIL) && Boolean(DEV_PASSWORD);
+
 export default function LandingPage() {
     const router = useRouter();
     const [isLoading, setIsLoading] = useState(false);
@@ -31,6 +36,27 @@ export default function LandingPage() {
 
         checkExistingSession();
     }, [router]);
+
+    const handleDevLogin = async () => {
+        setError("");
+        setIsLoading(true);
+        try {
+            const supabase = getSupabaseBrowserClient();
+            const { error: err } = await supabase.auth.signInWithPassword({
+                email: DEV_EMAIL!,
+                password: DEV_PASSWORD!,
+            });
+            if (err) {
+                setError(err.message);
+            } else {
+                router.push("/map");
+            }
+        } catch {
+            setError("Dev login failed.");
+        } finally {
+            setIsLoading(false);
+        }
+    };
 
     const handleGoogleSignIn = async () => {
         setError("");
@@ -99,6 +125,16 @@ export default function LandingPage() {
                             </svg>
                             {isLoading ? "Signing in..." : "Continue with Google"}
                         </button>
+
+                        {isDevBypassAvailable && (
+                            <button
+                                onClick={handleDevLogin}
+                                disabled={isLoading}
+                                className="w-full mt-3 bg-transparent text-gray-400 border border-gray-600 font-medium py-2 px-4 rounded-lg hover:border-gray-400 hover:text-gray-200 transition disabled:opacity-50 text-sm"
+                            >
+                                Dev Login
+                            </button>
+                        )}
 
                         {/* Footer */}
                         <p className="text-center text-xs text-gray-500 mt-8">
