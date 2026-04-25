@@ -3,6 +3,8 @@ export type LatLng = {
     longitude: number;
 };
 
+export { getLotForLocation } from "./lots";
+
 export const JOHN_ABBOTT_CENTER: LatLng = {
     latitude: 45.408822013619336,
     longitude: -73.94212693281301,

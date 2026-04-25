@@ -2,11 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type TouchEvent } from "react";
 import { useRouter } from "next/navigation";
-import type { FeatureCollection, MultiPolygon, Polygon } from "geojson";
+import type { FeatureCollection, Polygon } from "geojson";
 import type { Session } from "@supabase/supabase-js";
 import mapboxgl from "mapbox-gl";
 import useCampusProximity from "../hooks/useCampusProximity";
 import { CAMPUS_RADIUS_METERS, type LatLng } from "../lib/geo";
+import { PARKING_LOTS, getLotForLocation } from "../lib/lots";
 import { buildHeatmapFeatures, buildHeatmapPaint, type HeatmapReport } from "../lib/heatmap";
 import { getSupabaseBrowserClient } from "../lib/supabaseBrowser";
 import { useTheme } from "../lib/ThemeContext";
@@ -57,7 +58,6 @@ type ReportResponse = {
     error?: string;
 };
 
-type BoundaryFeatureCollection = FeatureCollection<Polygon | MultiPolygon>;
 
 const JOHN_ABBOTT_CENTER: LngLatTuple = [-73.94212693281301, 45.408822013619336];
 const JOHN_ABBOTT_ZOOM = 15.5;
@@ -65,7 +65,8 @@ const LIGHT_STYLE_URL = "mapbox://styles/mapbox/standard";
 const BOUNDARY_SOURCE_ID = "parking-boundary-source";
 const BOUNDARY_FILL_LAYER_ID = "parking-boundary-fill";
 const BOUNDARY_LINE_LAYER_ID = "parking-boundary-line";
-const BOUNDARY_GEOJSON_PATH = "/boundaries/jac-parking-boundaries.geojson";
+const LOT_LABELS_SOURCE_ID = "parking-lot-labels-source";
+const LOT_LABELS_LAYER_ID = "parking-lot-labels-layer";
 const REPORTS_HEATMAP_SOURCE_ID = "parking-reports-heatmap";
 const REPORTS_HEATMAP_LAYER_ID = "parking-reports-heatmap-layer";
 const HEATMAP_REPORTS_LIMIT = 120;
@@ -360,9 +361,10 @@ const buildOptimisticReport = (
     fullnessLevel: number,
     distanceToCampusMeters: number,
     reporterLocation: LatLng,
+    lotName: string,
 ): ParkingReport => ({
     id: `optimistic-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    lotName: "John Abbott Parking",
+    lotName,
     availability: deriveAvailabilityFromFullness(fullnessLevel),
     actionType,
     fullnessLevel,
@@ -405,6 +407,7 @@ const submitReportWithRetry = async (
     actionType: ReportActionType,
     fullnessLevel: number,
     reporterLocation: LatLng,
+    lotName: string,
 ): Promise<{ response: Response; payload: ReportResponse }> => {
     for (let attempt = 1; attempt <= SUBMIT_RETRY_MAX_ATTEMPTS; attempt += 1) {
         let response: Response;
@@ -421,6 +424,7 @@ const submitReportWithRetry = async (
                     fullnessLevel,
                     reporterLatitude: reporterLocation.latitude,
                     reporterLongitude: reporterLocation.longitude,
+                    lotName,
                 }),
             });
         } catch (error) {
@@ -537,8 +541,7 @@ export default function ParkingMap() {
     const mapLightPresetRef = useRef<"day" | "night">("day");
     const latestCardTouchStartRef = useRef<{ x: number; y: number } | null>(null);
     const panelTouchStartYRef = useRef<number | null>(null);
-    const boundaryDataRef = useRef<BoundaryFeatureCollection | null>(null);
-    const latestTransitionFrameRef = useRef<number | null>(null);
+const latestTransitionFrameRef = useRef<number | null>(null);
     const previousUpdateClearTimeoutRef = useRef<number | null>(null);
     const previousReportCountRef = useRef<number>(0);
     const notificationsInitializedRef = useRef<boolean>(false);
@@ -1219,6 +1222,16 @@ export default function ParkingMap() {
             return;
         }
 
+        if (selectedAction !== "leaving") {
+            const detectedLot = currentLocation
+                ? getLotForLocation(currentLocation.latitude, currentLocation.longitude)
+                : null;
+            if (!detectedLot) {
+                setReportFeedback("You must be inside a parking lot to submit a report.");
+                return;
+            }
+        }
+
         const actionToSubmit = selectedAction;
         const fullnessToSubmit = fullnessLevel;
 
@@ -1241,7 +1254,16 @@ export default function ParkingMap() {
                       })
                     : await resolveReporterLocation(currentLocation);
 
-            const optimisticReport = buildOptimisticReport(actionToSubmit, fullnessToSubmit, distanceToCampus, reporterLocation);
+            const detectedLot =
+                actionToSubmit !== "leaving"
+                    ? getLotForLocation(reporterLocation.latitude, reporterLocation.longitude)
+                    : null;
+
+            const reportLotName =
+                detectedLot?.name ??
+                (actionToSubmit === "leaving" ? (PARKING_LOTS[0]?.name ?? "Unknown Lot") : "Unknown Lot");
+
+            const optimisticReport = buildOptimisticReport(actionToSubmit, fullnessToSubmit, distanceToCampus, reporterLocation, reportLotName);
 
             setReports((prevReports) => {
                 const nonOptimisticReports = prevReports.filter((report) => !report.id.startsWith("optimistic-"));
@@ -1265,6 +1287,7 @@ export default function ParkingMap() {
                 actionToSubmit,
                 fullnessToSubmit,
                 reporterLocation,
+                reportLotName,
             );
 
             if (!response.ok || !payload.report) {
@@ -1670,46 +1693,44 @@ export default function ParkingMap() {
 
         let isActive = true;
 
-        const addBoundaryLayers = async (): Promise<void> => {
+        const addBoundaryLayers = (): void => {
             try {
-                // Load boundary data if not already cached
-                if (!boundaryDataRef.current) {
-                    const boundaryResponse = await fetch(BOUNDARY_GEOJSON_PATH, {
-                        method: "GET",
-                        cache: "no-store",
-                    });
-
-                    if (!boundaryResponse.ok) {
-                        throw new Error("Boundary file missing.");
-                    }
-
-                    boundaryDataRef.current = (await boundaryResponse.json()) as BoundaryFeatureCollection;
-                }
-
-                const boundaryData = boundaryDataRef.current;
-
-                if (!boundaryData) {
-                    throw new Error("Boundary data unavailable.");
-                }
-
                 if (!isActive) {
                     return;
                 }
 
-                // Add source if it doesn't exist
+                const boundaryData: FeatureCollection<Polygon> = {
+                    type: "FeatureCollection",
+                    features: PARKING_LOTS.map((lot) => ({
+                        type: "Feature",
+                        properties: { name: lot.name },
+                        geometry: {
+                            type: "Polygon",
+                            coordinates: [lot.polygon],
+                        },
+                    })),
+                };
+
+                const labelsData: FeatureCollection<GeoJSON.Point> = {
+                    type: "FeatureCollection",
+                    features: PARKING_LOTS.map((lot) => ({
+                        type: "Feature",
+                        properties: { name: lot.name },
+                        geometry: {
+                            type: "Point",
+                            coordinates: lot.labelCoord,
+                        },
+                    })),
+                };
+
                 if (!map.getSource(BOUNDARY_SOURCE_ID)) {
-                    map.addSource(BOUNDARY_SOURCE_ID, {
-                        type: "geojson",
-                        data: boundaryData,
-                    });
+                    map.addSource(BOUNDARY_SOURCE_ID, { type: "geojson", data: boundaryData });
                 }
 
-                // Guard against style/source race conditions.
                 if (!map.getSource(BOUNDARY_SOURCE_ID)) {
                     return;
                 }
 
-                // Add fill layer if it doesn't exist
                 if (!map.getLayer(BOUNDARY_FILL_LAYER_ID)) {
                     map.addLayer({
                         id: BOUNDARY_FILL_LAYER_ID,
@@ -1722,7 +1743,6 @@ export default function ParkingMap() {
                     });
                 }
 
-                // Add line layer if it doesn't exist
                 if (!map.getLayer(BOUNDARY_LINE_LAYER_ID)) {
                     map.addLayer({
                         id: BOUNDARY_LINE_LAYER_ID,
@@ -1735,12 +1755,35 @@ export default function ParkingMap() {
                     });
                 }
 
+                if (!map.getSource(LOT_LABELS_SOURCE_ID)) {
+                    map.addSource(LOT_LABELS_SOURCE_ID, { type: "geojson", data: labelsData });
+                }
+
+                if (!map.getLayer(LOT_LABELS_LAYER_ID)) {
+                    map.addLayer({
+                        id: LOT_LABELS_LAYER_ID,
+                        type: "symbol",
+                        source: LOT_LABELS_SOURCE_ID,
+                        layout: {
+                            "text-field": ["get", "name"],
+                            "text-size": 13,
+                            "text-anchor": "center",
+                            "text-allow-overlap": false,
+                        },
+                        paint: {
+                            "text-color": "#0369a1",
+                            "text-halo-color": "#ffffff",
+                            "text-halo-width": 2,
+                        },
+                    });
+                }
+
                 setAreBoundaryLayersReady(true);
                 setBoundaryLoadError("");
             } catch {
                 if (isActive) {
                     setAreBoundaryLayersReady(false);
-                    setBoundaryLoadError("Unable to load hardcoded boundary file.");
+                    setBoundaryLoadError("Unable to initialize lot boundary layers.");
                 }
             }
         };
@@ -1748,12 +1791,12 @@ export default function ParkingMap() {
         const handleMapLoad = (): void => {
             setIsMapReady(true);
             setAreBoundaryLayersReady(false);
-            void addBoundaryLayers();
+            addBoundaryLayers();
         };
 
         const handleMapStyleLoad = (): void => {
             setAreBoundaryLayersReady(false);
-            void addBoundaryLayers();
+            addBoundaryLayers();
         };
 
         map.on("load", handleMapLoad);

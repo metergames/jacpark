@@ -4,7 +4,7 @@
         {
             "type": "Feature",
             "properties": {
-                "name": "John Abbott Parking Perimeter"
+                "name": "John Abbott Parking"
             },
             "geometry": {
                 "type": "Polygon",
@@ -20,6 +20,42 @@
                         [-73.9423874, 45.4090218],
                         [-73.9428377, 45.4089458],
                         [-73.9436136, 45.4086924]
+                    ]
+                ]
+            }
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "name": "Lot B"
+            },
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [
+                    [
+                        [0, 0],
+                        [0, 0],
+                        [0, 0],
+                        [0, 0],
+                        [0, 0]
+                    ]
+                ]
+            }
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "name": "Lot C"
+            },
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [
+                    [
+                        [0, 0],
+                        [0, 0],
+                        [0, 0],
+                        [0, 0],
+                        [0, 0]
                     ]
                 ]
             }

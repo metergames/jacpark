@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { CAMPUS_RADIUS_METERS, haversineDistanceMeters, JOHN_ABBOTT_CENTER, type LatLng } from "../../lib/geo";
+import { CAMPUS_RADIUS_METERS, haversineDistanceMeters, JOHN_ABBOTT_CENTER, getLotForLocation, type LatLng } from "../../lib/geo";
+import { LOT_NAMES } from "../../lib/lots";
 import { getSupabaseServerClient } from "../../lib/supabaseServer";
 import { sendPushNotificationToAll } from "../../lib/webPushServer";
 
@@ -225,6 +226,7 @@ export async function POST(request: Request) {
     const fullnessLevelValue = reportData.fullnessLevel;
     const reporterLatitudeValue = reportData.reporterLatitude;
     const reporterLongitudeValue = reportData.reporterLongitude;
+    const lotNameValue = reportData.lotName;
 
     if (typeof actionTypeValue !== "string" || !allowedActionTypes.has(actionTypeValue as ReportActionType)) {
         return NextResponse.json({ error: "Invalid action type." }, { status: 400 });
@@ -249,6 +251,12 @@ export async function POST(request: Request) {
     if (actionType !== "leaving" && !hasSuppliedCoordinates) {
         return NextResponse.json({ error: "Invalid reporter coordinates." }, { status: 400 });
     }
+
+    if (typeof lotNameValue !== "string" || !LOT_NAMES.has(lotNameValue)) {
+        return NextResponse.json({ error: "Invalid lot name." }, { status: 400 });
+    }
+
+    const lotName = lotNameValue;
 
     const suppliedReporterLocation: LatLng | null = hasSuppliedCoordinates
         ? {
@@ -364,6 +372,16 @@ export async function POST(request: Request) {
             );
         }
 
+        if (actionType !== "leaving") {
+            const detectedLot = getLotForLocation(reporterLocation.latitude, reporterLocation.longitude);
+            if (!detectedLot || detectedLot.name !== lotName) {
+                return NextResponse.json(
+                    { error: "You must be inside the lot to submit a report for it." },
+                    { status: 403 },
+                );
+            }
+        }
+
         if (actionType === "observing") {
             const { data: latestObservingData, error: latestObservingError } = await supabase
                 .from("parking_reports")
@@ -402,7 +420,7 @@ export async function POST(request: Request) {
         const { data, error } = await supabase
             .from("parking_reports")
             .insert({
-                lot_name: "John Abbott Parking",
+                lot_name: lotName,
                 availability: deriveAvailabilityFromFullness(fullnessLevel),
                 action_type: actionType,
                 fullness_level: fullnessLevel,
