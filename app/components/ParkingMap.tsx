@@ -1520,7 +1520,16 @@ export default function ParkingMap() {
 
                 if (isActive) {
                     setReportsLoadError("");
-                    setReports(Array.isArray(payload.reports) ? payload.reports : []);
+                    const incoming = Array.isArray(payload.reports) ? payload.reports : [];
+                    setReports((prev) => {
+                        if (
+                            prev.length === incoming.length &&
+                            incoming.every((r, i) => r.id === prev[i]?.id)
+                        ) {
+                            return prev;
+                        }
+                        return incoming;
+                    });
                     if (session?.access_token) {
                         setIsUserParkedToday(Boolean(payload.viewerParkingState?.isParkedToday));
                     } else {
