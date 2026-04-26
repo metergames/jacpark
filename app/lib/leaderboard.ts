@@ -32,11 +32,12 @@ export async function fetchLeaderboard(limit: number = 10, period: LeaderboardPe
             .from("profiles")
             .select("id, display_name, points")
             .order("points", { ascending: false })
-            .order("created_at", { ascending: true });
+            .order("created_at", { ascending: true })
+            .limit(limit);
 
         if (error) throw new Error(error.message);
 
-        return (profiles || []).slice(0, limit).map((p, i) => ({
+        return (profiles || []).map((p, i) => ({
             id: p.id,
             full_name: p.display_name || "Unknown User",
             points: p.points || 0,

@@ -22,7 +22,9 @@ const MEDAL_COLORS: Record<number, string> = {
     3: "#cd8a5e",
 };
 
-type CacheEntry = { data: LeaderboardEntry[]; rank: { rank: number; points: number } | null };
+const CACHE_TTL_MS = 60_000;
+
+type CacheEntry = { data: LeaderboardEntry[]; rank: { rank: number; points: number } | null; ts: number };
 
 export default function LeaderboardModal({ session, onClose }: LeaderboardModalProps) {
     const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
@@ -37,7 +39,7 @@ export default function LeaderboardModal({ session, onClose }: LeaderboardModalP
         scrollRef.current?.scrollTo({ top: 0 });
 
         const cached = cache.current[activeTab];
-        if (cached) {
+        if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
             setLeaderboard(cached.data);
             setUserRank(cached.rank);
             setError(null);
@@ -53,7 +55,7 @@ export default function LeaderboardModal({ session, onClose }: LeaderboardModalP
                     fetchLeaderboard(10, activeTab),
                     session?.user?.id ? getUserRank(session.user.id, activeTab) : Promise.resolve(null),
                 ]);
-                cache.current[activeTab] = { data, rank };
+                cache.current[activeTab] = { data, rank, ts: Date.now() };
                 setLeaderboard(data);
                 setUserRank(rank);
             } catch {

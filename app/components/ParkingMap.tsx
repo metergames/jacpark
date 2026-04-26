@@ -1420,7 +1420,7 @@ export default function ParkingMap() {
             );
 
             if (!response.ok || !payload.report) {
-                setReports(previousReportsSnapshot);
+                setReports((curr) => curr.filter((r) => r.id !== optimisticReport.id));
                 setIsUserParkedToday(previousParkState);
                 setParkedCarLocation(previousParkedCarLocation);
                 setReportFeedback(payload.error ?? "Unable to sync this update right now. Please try again.");
@@ -1979,7 +1979,7 @@ export default function ParkingMap() {
     useEffect(() => {
         if (!isMapReady || !mapRef.current) return;
 
-        if (!isPremiumActive || !parkedCarLocation || !isUserParkedToday) {
+        if (!isPremiumActive || !parkedCarLocation) {
             parkedCarMarkerRef.current?.remove();
             parkedCarMarkerRef.current = null;
             return;
@@ -1999,7 +1999,7 @@ export default function ParkingMap() {
         parkedCarMarkerRef.current = new mapboxgl.Marker({ element: el, anchor: "bottom" })
             .setLngLat(pos)
             .addTo(mapRef.current);
-    }, [isMapReady, isPremiumActive, parkedCarLocation, isUserParkedToday]);
+    }, [isMapReady, isPremiumActive, parkedCarLocation]);
 
     // Manage heatmap layer (rendered for free and premium with different paint)
     useEffect(() => {

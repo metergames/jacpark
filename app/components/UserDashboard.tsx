@@ -221,8 +221,8 @@ export default function UserDashboard({
 
     const handlePurchasePremium = useCallback(async (): Promise<void> => {
         if (!session?.access_token || isBuyingPremium) return;
-        setIsBuyingPremium(true);
         setPremiumFeedback("");
+        setIsBuyingPremium(true);
         try {
             const response = await fetch("/api/premium", {
                 method: "POST",
