@@ -60,40 +60,30 @@ function Row({
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
     return (
         <div className="mb-2">
-            <div
-                className="px-5 py-2 text-[11px] font-extrabold uppercase tracking-[0.06em]"
-                style={{ color: "var(--muted)" }}
-            >
+            <div className="px-5 py-2 text-[11px] font-extrabold uppercase tracking-[0.06em]" style={{ color: "var(--muted)" }}>
                 {title}
             </div>
-            <div
-                className="mx-3 overflow-hidden rounded-2xl"
-                style={{ backgroundColor: "var(--surface)", border: "1px solid var(--line)" }}
-            >
+            <div className="mx-3 overflow-hidden rounded-2xl" style={{ backgroundColor: "var(--surface)", border: "1px solid var(--line)" }}>
                 {children}
             </div>
         </div>
     );
 }
 
-const ChevronRight = () => (
-    <svg viewBox="0 0 24 24" className="h-4 w-4 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-        <path d="M9 6l6 6-6 6" />
-    </svg>
-);
+const readLocalTime = (key: string, fallback: string): string => {
+    if (typeof localStorage === "undefined") return fallback;
+    return localStorage.getItem(key) ?? fallback;
+};
 
 export default function SettingsModal({ session, onClose }: SettingsModalProps) {
     const { theme, setTheme } = useTheme();
     const [push, setPush] = useState(true);
-    const [haptics, setHaptics] = useState(() => {
-        if (typeof localStorage !== "undefined") return localStorage.getItem("haptics") !== "false";
-        return true;
-    });
-    const [units, setUnits] = useState<"metric" | "imperial">(() => {
-        if (typeof localStorage !== "undefined") return (localStorage.getItem("units") as "metric" | "imperial") || "metric";
-        return "metric";
-    });
+    const [haptics, setHaptics] = useState(() => readLocalTime("haptics", "true") !== "false");
+    const [units, setUnits] = useState<"metric" | "imperial">(() => (readLocalTime("units", "metric") as "metric" | "imperial"));
     const [heatmap, setHeatmap] = useState(true);
+    const [quietHoursOpen, setQuietHoursOpen] = useState(false);
+    const [quietStart, setQuietStart] = useState(() => readLocalTime("quiet_start", "22:00"));
+    const [quietEnd, setQuietEnd] = useState(() => readLocalTime("quiet_end", "07:00"));
 
     const handleHapticsChange = (v: boolean) => {
         setHaptics(v);
@@ -106,10 +96,20 @@ export default function SettingsModal({ session, onClose }: SettingsModalProps) 
         localStorage.setItem("units", next);
     };
 
+    const handleQuietStartChange = (val: string) => {
+        setQuietStart(val);
+        localStorage.setItem("quiet_start", val);
+    };
+
+    const handleQuietEndChange = (val: string) => {
+        setQuietEnd(val);
+        localStorage.setItem("quiet_end", val);
+    };
+
     return (
         <div
             className="fixed inset-0 z-30 overflow-auto md:hidden"
-            style={{ backgroundColor: "var(--background)", color: "var(--foreground)" }}
+            style={{ backgroundColor: "var(--background)", color: "var(--foreground)", overscrollBehaviorY: "contain" }}
         >
             {/* Header */}
             <div
@@ -132,10 +132,7 @@ export default function SettingsModal({ session, onClose }: SettingsModalProps) 
             {/* Appearance */}
             <Section title="Appearance">
                 <div className="p-3">
-                    <div
-                        className="grid grid-cols-3 gap-1.5 p-1 rounded-xl"
-                        style={{ backgroundColor: "var(--surface-strong)" }}
-                    >
+                    <div className="grid grid-cols-3 gap-1.5 p-1 rounded-xl" style={{ backgroundColor: "var(--surface-strong)" }}>
                         {(["light", "dark", "auto"] as const).map((k) => {
                             const labels = { light: "Light", dark: "Dark", auto: "Auto" };
                             const icons = { light: "☀️", dark: "🌙", auto: "✨" };
@@ -158,9 +155,7 @@ export default function SettingsModal({ session, onClose }: SettingsModalProps) 
                         })}
                     </div>
                     {theme === "auto" && (
-                        <p className="mt-2 text-[11px]" style={{ color: "var(--muted)" }}>
-                            Auto switches at sunrise / sunset.
-                        </p>
+                        <p className="mt-2 text-[11px]" style={{ color: "var(--muted)" }}>Auto switches at sunrise / sunset.</p>
                     )}
                 </div>
             </Section>
@@ -170,9 +165,67 @@ export default function SettingsModal({ session, onClose }: SettingsModalProps) 
                 <Row label="Push notifications" sub="Daily challenge reminders, achievements">
                     <Toggle on={push} onChange={setPush} />
                 </Row>
-                <Row label="Quiet hours" sub="22:00 – 07:00" onClick={() => {}} last>
-                    <span style={{ color: "var(--muted)" }}><ChevronRight /></span>
-                </Row>
+                {/* Quiet hours row — expands inline */}
+                <div style={{ borderBottom: "none" }}>
+                    <div
+                        onClick={() => setQuietHoursOpen((o) => !o)}
+                        className="flex items-center px-4 py-3.5 gap-3 cursor-pointer"
+                    >
+                        <div className="flex-1 min-w-0">
+                            <div className="text-[14px] font-bold" style={{ color: "var(--foreground)" }}>Quiet hours</div>
+                            <div className="text-xs mt-0.5" style={{ color: "var(--muted)" }}>
+                                {quietStart} – {quietEnd} · no notifications
+                            </div>
+                        </div>
+                        <svg
+                            viewBox="0 0 24 24"
+                            className="h-4 w-4 flex-shrink-0 transition-transform duration-200"
+                            style={{ transform: quietHoursOpen ? "rotate(180deg)" : "none", color: "var(--muted)" }}
+                            fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"
+                        >
+                            <path d="M6 9l6 6 6-6" />
+                        </svg>
+                    </div>
+                    {quietHoursOpen && (
+                        <div className="px-4 pb-4 flex items-center gap-4">
+                            <div className="flex-1">
+                                <label className="text-[11px] font-bold uppercase tracking-wide block mb-1.5" style={{ color: "var(--muted)" }}>
+                                    Start
+                                </label>
+                                <input
+                                    type="time"
+                                    value={quietStart}
+                                    onChange={(e) => handleQuietStartChange(e.target.value)}
+                                    className="w-full rounded-xl px-3 py-2.5 text-sm font-bold"
+                                    style={{
+                                        backgroundColor: "var(--surface-strong)",
+                                        border: "1px solid var(--line)",
+                                        color: "var(--foreground)",
+                                        outline: "none",
+                                    }}
+                                />
+                            </div>
+                            <div className="pt-5 text-sm font-bold" style={{ color: "var(--muted)" }}>to</div>
+                            <div className="flex-1">
+                                <label className="text-[11px] font-bold uppercase tracking-wide block mb-1.5" style={{ color: "var(--muted)" }}>
+                                    End
+                                </label>
+                                <input
+                                    type="time"
+                                    value={quietEnd}
+                                    onChange={(e) => handleQuietEndChange(e.target.value)}
+                                    className="w-full rounded-xl px-3 py-2.5 text-sm font-bold"
+                                    style={{
+                                        backgroundColor: "var(--surface-strong)",
+                                        border: "1px solid var(--line)",
+                                        color: "var(--foreground)",
+                                        outline: "none",
+                                    }}
+                                />
+                            </div>
+                        </div>
+                    )}
+                </div>
             </Section>
 
             {/* Map & data */}
@@ -197,11 +250,8 @@ export default function SettingsModal({ session, onClose }: SettingsModalProps) 
                         <span />
                     </Row>
                 )}
-                <Row label="Privacy" sub="Reports are anonymous" onClick={() => {}}>
-                    <ChevronRight />
-                </Row>
-                <Row label="Help & feedback" onClick={() => {}} last>
-                    <ChevronRight />
+                <Row label="Privacy" sub="Reports are anonymous" last>
+                    <span />
                 </Row>
             </Section>
 

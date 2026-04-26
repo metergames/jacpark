@@ -42,6 +42,10 @@ html.light {
     --font-mono: var(--font-geist-mono);
 }
 
+html {
+    overscroll-behavior-y: none;
+}
+
 body {
     min-height: 100vh;
     background:

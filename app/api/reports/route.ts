@@ -494,12 +494,6 @@ export async function POST(request: Request) {
             }
         }
 
-        void sendPushNotificationToAll({
-            title: "Omnilots",
-            body: `New ${actionType} update was posted for parking conditions.`,
-            tag: "omnilots-report-update",
-        });
-
         return NextResponse.json({ report }, { status: 201 });
     } catch {
         return NextResponse.json({ error: "Server configuration error." }, { status: 500 });

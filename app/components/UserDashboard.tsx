@@ -217,7 +217,7 @@ export default function UserDashboard({
     return (
         <div
             className="fixed inset-0 z-30 overflow-auto md:hidden"
-            style={{ backgroundColor: "var(--background)", color: "var(--foreground)" }}
+            style={{ backgroundColor: "var(--background)", color: "var(--foreground)", overscrollBehaviorY: "contain" }}
         >
             <div className="px-5" style={{ paddingTop: "calc(3.5rem + max(0px, env(safe-area-inset-top)))", paddingBottom: "2.5rem" }}>
                 {/* Header */}

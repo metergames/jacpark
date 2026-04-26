@@ -66,7 +66,7 @@ export default function LeaderboardModal({ session, onClose }: LeaderboardModalP
     return (
         <div
             className="fixed inset-0 z-30 overflow-auto md:hidden"
-            style={{ backgroundColor: "var(--background)", color: "var(--foreground)" }}
+            style={{ backgroundColor: "var(--background)", color: "var(--foreground)", overscrollBehaviorY: "contain" }}
         >
             <div style={{ paddingBottom: "2.5rem" }}>
                 {/* Header */}

@@ -61,7 +61,7 @@ type ReportResponse = {
 
 
 const JOHN_ABBOTT_CENTER: LngLatTuple = [-73.94212693281301, 45.408822013619336];
-const JOHN_ABBOTT_ZOOM = 15.5;
+const JOHN_ABBOTT_ZOOM = 16;
 const LIGHT_STYLE_URL = "mapbox://styles/mapbox/standard";
 const BOUNDARY_SOURCE_ID = "parking-boundary-source";
 const BOUNDARY_FILL_LAYER_ID = "parking-boundary-fill";
@@ -1593,8 +1593,15 @@ export default function ParkingMap() {
         }
 
         panelCloseTimeoutRef.current = window.setTimeout(() => {
-            setSelectedAction(null);
-            setFullnessLevel(null);
+            if (selectedActionRef.current) {
+                // Close the form, keep lot selected
+                setSelectedAction(null);
+                setFullnessLevel(null);
+            } else {
+                // Close the lot info panel entirely
+                isManualLotSelectionRef.current = false;
+                setSelectedLotName(null);
+            }
             setPanelSwipeOffsetY(0);
             setIsPanelClosing(false);
             panelCloseTimeoutRef.current = null;
@@ -1918,7 +1925,7 @@ export default function ParkingMap() {
     useEffect(() => {
         if (!isMapReady || !mapRef.current) return;
 
-        if (!isPremiumActive || !parkedCarLocation) {
+        if (!isPremiumActive || !parkedCarLocation || !isUserParkedToday) {
             parkedCarMarkerRef.current?.remove();
             parkedCarMarkerRef.current = null;
             return;
@@ -1938,7 +1945,7 @@ export default function ParkingMap() {
         parkedCarMarkerRef.current = new mapboxgl.Marker({ element: el, anchor: "bottom" })
             .setLngLat(pos)
             .addTo(mapRef.current);
-    }, [isMapReady, isPremiumActive, parkedCarLocation]);
+    }, [isMapReady, isPremiumActive, parkedCarLocation, isUserParkedToday]);
 
     // Manage heatmap layer (rendered for free and premium with different paint)
     useEffect(() => {
@@ -2171,9 +2178,9 @@ export default function ParkingMap() {
 
             </div>
 
-            {/* Recenter FAB — mobile only, above bottom sheet */}
-            {isAuthReady && session && !selectedAction && (
-                <div className="absolute right-4 z-10 md:hidden" style={{ bottom: activeLotName ? "calc(200px + max(0px, env(safe-area-inset-bottom)))" : "1.5rem" }}>
+            {/* Recenter FAB — only when no lot sheet is visible */}
+            {isAuthReady && session && !activeLotName && !selectedAction && (
+                <div className="absolute right-4 bottom-6 z-10 md:hidden">
                     <button
                         type="button"
                         onClick={() => void handleRecenterToUser()}
@@ -2198,17 +2205,15 @@ export default function ParkingMap() {
                 <div
                     className="fixed bottom-0 left-0 right-0 z-10 md:hidden"
                     style={{
-                        transform: selectedAction ? `translateY(${panelSwipeOffsetY}px)` : undefined,
-                        transition: selectedAction
-                            ? (isPanelDragging ? "none" : isPanelClosing ? "transform 0.32s cubic-bezier(0.2,0.8,0.2,1)" : "transform 0.18s ease-out")
-                            : undefined,
-                        touchAction: selectedAction ? "none" : undefined,
+                        transform: `translateY(${panelSwipeOffsetY}px)`,
+                        transition: isPanelDragging ? "none" : isPanelClosing ? "transform 0.32s cubic-bezier(0.2,0.8,0.2,1)" : "transform 0.18s ease-out",
+                        touchAction: "none",
                         overscrollBehaviorY: "contain",
                     }}
-                    onTouchStart={selectedAction ? handlePanelTouchStart : undefined}
-                    onTouchMove={selectedAction ? handlePanelTouchMove : undefined}
-                    onTouchEnd={selectedAction ? handlePanelTouchEnd : undefined}
-                    onTouchCancel={selectedAction ? handlePanelTouchEnd : undefined}
+                    onTouchStart={handlePanelTouchStart}
+                    onTouchMove={handlePanelTouchMove}
+                    onTouchEnd={handlePanelTouchEnd}
+                    onTouchCancel={handlePanelTouchEnd}
                 >
                     <div
                         className="rounded-t-[20px]"

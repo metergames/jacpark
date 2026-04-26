@@ -15,8 +15,8 @@ export type HeatmapReport = {
 
 export const HEATMAP_HALFLIFE_MS = 45 * 60 * 1000;
 export const HEATMAP_MAX_AGE_MS = 3 * 60 * 60 * 1000;
-export const HEATMAP_FANOUT_RADIUS_METERS = 25;
-export const HEATMAP_FANOUT_POINT_COUNT = 6;
+export const HEATMAP_FANOUT_RADIUS_METERS = 20;
+export const HEATMAP_FANOUT_POINT_COUNT = 4;
 export const HEATMAP_WEIGHT_FLOOR = 0.05;
 
 const METERS_PER_DEGREE_LAT = 111320;
