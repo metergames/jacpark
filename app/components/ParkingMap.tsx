@@ -519,12 +519,13 @@ const submitReportWithRetry = async (
     throw new Error("Report submission exhausted retry attempts.");
 };
 
-const formatDistance = (meters: number): string => {
-    if (!Number.isFinite(meters)) {
-        return "unknown";
+const formatDistance = (meters: number, units: "metric" | "imperial" = "metric"): string => {
+    if (!Number.isFinite(meters)) return "unknown";
+    if (units === "imperial") {
+        const feet = Math.round(meters * 3.28084);
+        return feet >= 5280 ? `${(feet / 5280).toFixed(1)} mi` : `${feet} ft`;
     }
-
-    return `${Math.round(meters)} m`;
+    return meters >= 1000 ? `${(meters / 1000).toFixed(1)} km` : `${Math.round(meters)} m`;
 };
 
 const clampNumber = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
@@ -659,6 +660,10 @@ export default function ParkingMap() {
     const [showPointBurst, setShowPointBurst] = useState<boolean>(false);
     const [lastEarnedPoints, setLastEarnedPoints] = useState<number>(5);
     const [selectedLotName, setSelectedLotName] = useState<string | null>(null);
+    const [distanceUnits, setDistanceUnits] = useState<"metric" | "imperial">(() => {
+        if (typeof localStorage === "undefined") return "metric";
+        return (localStorage.getItem("units") as "metric" | "imperial" | null) ?? "metric";
+    });
 
     const { isNearCampus, distanceToCampus, locationError, currentLocation } = useCampusProximity();
 
@@ -814,6 +819,16 @@ export default function ParkingMap() {
                 window.clearTimeout(panelCloseTimeoutRef.current);
             }
         };
+    }, []);
+
+    useEffect(() => {
+        const handler = (e: StorageEvent) => {
+            if (e.key === "units" && (e.newValue === "metric" || e.newValue === "imperial")) {
+                setDistanceUnits(e.newValue);
+            }
+        };
+        window.addEventListener("storage", handler);
+        return () => window.removeEventListener("storage", handler);
     }, []);
 
     const canSubmitReport = useMemo(
@@ -1305,6 +1320,7 @@ export default function ParkingMap() {
             setReportFeedback(
                 `Reporting is restricted to users within ${CAMPUS_RADIUS_METERS} m of campus. Current distance: ${formatDistance(
                     distanceToCampus,
+                    distanceUnits,
                 )}.`,
             );
             return;
@@ -1402,6 +1418,10 @@ export default function ParkingMap() {
                 });
             } else if (actionToSubmit === "leaving") {
                 setParkedCarLocation(null);
+            }
+
+            if (typeof navigator !== "undefined" && "vibrate" in navigator && localStorage.getItem("haptics") === "true") {
+                navigator.vibrate([40, 30, 40]);
             }
 
             // Show notification for successful parking update
@@ -2066,7 +2086,7 @@ export default function ParkingMap() {
                             <div className="text-[13px] font-extrabold truncate" style={{ color: "var(--foreground)" }}>
                                 {isNearCampus
                                     ? `${activeLotName} · ${zoneAvailability === "open" ? "Open" : zoneAvailability === "limited" ? "Limited" : "Full"}`
-                                    : `${formatDistance(distanceToCampus)} from zone`}
+                                    : `${formatDistance(distanceToCampus, distanceUnits)} from zone`}
                             </div>
                         </div>
                     </div>
@@ -2402,6 +2422,7 @@ export default function ParkingMap() {
                     onLeaderboardClick={() => setShowLeaderboard(true)}
                     onClose={() => setShowDashboard(false)}
                     onPremiumStatusChange={(status) => { applyPremiumStatus(status); }}
+                    onFindMyCar={() => { setShowDashboard(false); handleFindMyCar(); }}
                     streakDays={streakDays}
                 />
             )}

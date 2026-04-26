@@ -78,7 +78,7 @@ const readLocalTime = (key: string, fallback: string): string => {
 export default function SettingsModal({ session, onClose }: SettingsModalProps) {
     const { theme, setTheme } = useTheme();
     const [push, setPush] = useState(true);
-    const [haptics, setHaptics] = useState(() => readLocalTime("haptics", "true") !== "false");
+    const [haptics, setHaptics] = useState(() => readLocalTime("haptics", "false") === "true");
     const [units, setUnits] = useState<"metric" | "imperial">(() => (readLocalTime("units", "metric") as "metric" | "imperial"));
     const [heatmap, setHeatmap] = useState(true);
     const [quietHoursOpen, setQuietHoursOpen] = useState(false);
@@ -94,6 +94,7 @@ export default function SettingsModal({ session, onClose }: SettingsModalProps) 
         const next = units === "metric" ? "imperial" : "metric";
         setUnits(next);
         localStorage.setItem("units", next);
+        window.dispatchEvent(new StorageEvent("storage", { key: "units", newValue: next }));
     };
 
     const handleQuietStartChange = (val: string) => {

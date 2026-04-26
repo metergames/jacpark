@@ -7,68 +7,133 @@ export interface LeaderboardEntry {
     rank?: number;
 }
 
-export async function fetchLeaderboard(limit: number = 10): Promise<LeaderboardEntry[]> {
+export type LeaderboardPeriod = "week" | "month" | "all";
+
+const POINTS_BY_ACTION: Record<string, number> = { parked: 2, leaving: 2, observing: 1 };
+
+function periodStart(period: LeaderboardPeriod): Date | null {
+    if (period === "all") return null;
+    const now = new Date();
+    if (period === "week") {
+        const d = new Date(now);
+        d.setDate(d.getDate() - 7);
+        return d;
+    }
+    const d = new Date(now);
+    d.setMonth(d.getMonth() - 1);
+    return d;
+}
+
+export async function fetchLeaderboard(limit: number = 10, period: LeaderboardPeriod = "all"): Promise<LeaderboardEntry[]> {
     try {
         const supabase = getSupabaseBrowserClient();
 
-        // Fetch all users from profiles table, sorted by points descending (including those with 0 points)
-        const { data: profiles, error: profileError } = await supabase
-            .from("profiles")
-            .select("id, display_name, points")
-            .order("points", { ascending: false })
-            .order("created_at", { ascending: true });
+        if (period === "all") {
+            const { data: profiles, error } = await supabase
+                .from("profiles")
+                .select("id, display_name, points")
+                .order("points", { ascending: false })
+                .order("created_at", { ascending: true });
 
-        if (profileError) {
-            console.warn("Error fetching profiles table:", profileError);
-            return [];
+            if (error) return [];
+
+            return (profiles || []).slice(0, limit).map((p, i) => ({
+                id: p.id,
+                full_name: p.display_name || "Unknown User",
+                points: p.points || 0,
+                rank: i + 1,
+            }));
         }
 
-        // Transform and add rank, limit to specified amount
-        return (profiles || []).slice(0, limit).map((profile, index) => ({
-            id: profile.id,
-            full_name: profile.display_name || "Unknown User",
-            points: profile.points || 0,
-            rank: index + 1,
-        }));
-    } catch (error) {
-        console.error("Error fetching leaderboard:", error);
+        const since = periodStart(period)!;
+
+        const { data: reports, error: reportsError } = await supabase
+            .from("parking_reports")
+            .select("user_id, action_type")
+            .gte("created_at", since.toISOString())
+            .not("user_id", "is", null);
+
+        if (reportsError || !reports || reports.length === 0) return [];
+
+        const pointsMap = new Map<string, number>();
+        for (const r of reports) {
+            if (!r.user_id) continue;
+            const pts = POINTS_BY_ACTION[r.action_type as string] ?? 1;
+            pointsMap.set(r.user_id, (pointsMap.get(r.user_id) ?? 0) + pts);
+        }
+
+        const userIds = [...pointsMap.keys()];
+        const { data: profiles, error: profilesError } = await supabase
+            .from("profiles")
+            .select("id, display_name")
+            .in("id", userIds);
+
+        if (profilesError || !profiles) return [];
+
+        const entries = profiles
+            .map((p) => ({
+                id: p.id,
+                full_name: p.display_name || "Unknown User",
+                points: pointsMap.get(p.id) ?? 0,
+            }))
+            .sort((a, b) => b.points - a.points || 0);
+
+        return entries.slice(0, limit).map((e, i) => ({ ...e, rank: i + 1 }));
+    } catch {
         return [];
     }
 }
 
-export async function getUserRank(userId: string): Promise<{ rank: number; points: number } | null> {
+export async function getUserRank(userId: string, period: LeaderboardPeriod = "all"): Promise<{ rank: number; points: number } | null> {
     try {
         const supabase = getSupabaseBrowserClient();
 
-        // Get the user's points
-        const { data: userProfile, error: userError } = await supabase
-            .from("profiles")
-            .select("points")
-            .eq("id", userId)
-            .single();
+        if (period === "all") {
+            const { data: userProfile, error: userError } = await supabase
+                .from("profiles")
+                .select("points")
+                .eq("id", userId)
+                .single();
 
-        if (userError || !userProfile) {
-            console.warn("Could not fetch user profile:", userError);
-            return null;
+            if (userError || !userProfile) return null;
+
+            const { count, error: countError } = await supabase
+                .from("profiles")
+                .select("*", { count: "exact", head: true })
+                .gt("points", userProfile.points);
+
+            if (countError) return null;
+
+            return { rank: (count || 0) + 1, points: userProfile.points || 0 };
         }
 
-        // Count how many users have more points
-        const { count, error: countError } = await supabase
-            .from("profiles")
-            .select("*", { count: "exact", head: true })
-            .gt("points", userProfile.points);
+        const since = periodStart(period)!;
 
-        if (countError) {
-            console.warn("Could not fetch user rank:", countError);
-            return null;
+        const { data: reports, error: reportsError } = await supabase
+            .from("parking_reports")
+            .select("user_id, action_type")
+            .gte("created_at", since.toISOString())
+            .not("user_id", "is", null);
+
+        if (reportsError || !reports) return null;
+
+        const pointsMap = new Map<string, number>();
+        for (const r of reports) {
+            if (!r.user_id) continue;
+            const pts = POINTS_BY_ACTION[r.action_type as string] ?? 1;
+            pointsMap.set(r.user_id, (pointsMap.get(r.user_id) ?? 0) + pts);
         }
 
-        return {
-            rank: (count || 0) + 1,
-            points: userProfile.points || 0,
-        };
-    } catch (error) {
-        console.error("Error fetching user rank:", error);
+        const userPoints = pointsMap.get(userId) ?? 0;
+        if (userPoints === 0 && !pointsMap.has(userId)) return { rank: pointsMap.size + 1, points: 0 };
+
+        let rank = 1;
+        for (const [uid, pts] of pointsMap) {
+            if (uid !== userId && pts > userPoints) rank++;
+        }
+
+        return { rank, points: userPoints };
+    } catch {
         return null;
     }
 }

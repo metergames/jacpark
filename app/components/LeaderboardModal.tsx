@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
-import { fetchLeaderboard, getUserRank } from "../lib/leaderboard";
+import { fetchLeaderboard, getUserRank, type LeaderboardPeriod } from "../lib/leaderboard";
 
 interface LeaderboardEntry {
     id: string;
@@ -27,7 +27,7 @@ export default function LeaderboardModal({ session, onClose }: LeaderboardModalP
     const [userRank, setUserRank] = useState<{ rank: number; points: number } | null>(null);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
-    const [activeTab, setActiveTab] = useState<"week" | "month" | "all">("week");
+    const [activeTab, setActiveTab] = useState<LeaderboardPeriod>("week");
 
     useEffect(() => {
         const load = async () => {
@@ -35,8 +35,8 @@ export default function LeaderboardModal({ session, onClose }: LeaderboardModalP
             setError(null);
             try {
                 const [data, rank] = await Promise.all([
-                    fetchLeaderboard(10),
-                    session?.user?.id ? getUserRank(session.user.id) : Promise.resolve(null),
+                    fetchLeaderboard(10, activeTab),
+                    session?.user?.id ? getUserRank(session.user.id, activeTab) : Promise.resolve(null),
                 ]);
                 setLeaderboard(data);
                 setUserRank(rank);
@@ -47,7 +47,7 @@ export default function LeaderboardModal({ session, onClose }: LeaderboardModalP
             }
         };
         void load();
-    }, [session?.user?.id]);
+    }, [session?.user?.id, activeTab]);
 
     const top3 = leaderboard.slice(0, 3);
     const rest = leaderboard.slice(3);

@@ -26,8 +26,37 @@ interface UserDashboardProps {
     onLeaderboardClick: () => void;
     onClose: () => void;
     onPremiumStatusChange?: (status: PremiumStatus) => void;
+    onFindMyCar?: () => void;
     streakDays?: number;
 }
+
+type ProfileCache = {
+    points: number;
+    rank: number | null;
+    reports: number;
+    distinctLots: number;
+    premiumExpiresAt: string | null;
+    premiumMonthCostPoints: number;
+    hasSavedCar: boolean;
+};
+
+const readProfileCache = (userId: string): ProfileCache | null => {
+    try {
+        const raw = localStorage.getItem(`profile_cache_${userId}`);
+        if (!raw) return null;
+        return JSON.parse(raw) as ProfileCache;
+    } catch {
+        return null;
+    }
+};
+
+const writeProfileCache = (userId: string, data: ProfileCache): void => {
+    try {
+        localStorage.setItem(`profile_cache_${userId}`, JSON.stringify(data));
+    } catch {
+        // ignore
+    }
+};
 
 const ChevronRightIcon = () => (
     <svg viewBox="0 0 24 24" className="h-4 w-4 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -70,15 +99,17 @@ export default function UserDashboard({
     onLeaderboardClick,
     onClose,
     onPremiumStatusChange,
+    onFindMyCar,
     streakDays = 0,
 }: UserDashboardProps) {
-    const [userPoints, setUserPoints] = useState<number>(0);
-    const [userRank, setUserRank] = useState<number | null>(null);
-    const [userReports, setUserReports] = useState<number>(0);
-    const [distinctLots, setDistinctLots] = useState<number>(0);
-    const [premiumExpiresAt, setPremiumExpiresAt] = useState<string | null>(null);
-    const [premiumMonthCostPoints, setPremiumMonthCostPoints] = useState<number>(60);
-    const [hasSavedCar, setHasSavedCar] = useState<boolean>(false);
+    const cachedProfile = session?.user?.id ? readProfileCache(session.user.id) : null;
+    const [userPoints, setUserPoints] = useState<number>(cachedProfile?.points ?? 0);
+    const [userRank, setUserRank] = useState<number | null>(cachedProfile?.rank ?? null);
+    const [userReports, setUserReports] = useState<number>(cachedProfile?.reports ?? 0);
+    const [distinctLots, setDistinctLots] = useState<number>(cachedProfile?.distinctLots ?? 0);
+    const [premiumExpiresAt, setPremiumExpiresAt] = useState<string | null>(cachedProfile?.premiumExpiresAt ?? null);
+    const [premiumMonthCostPoints, setPremiumMonthCostPoints] = useState<number>(cachedProfile?.premiumMonthCostPoints ?? 60);
+    const [hasSavedCar, setHasSavedCar] = useState<boolean>(cachedProfile?.hasSavedCar ?? false);
     const [premiumFeedback, setPremiumFeedback] = useState<string>("");
     const [isBuyingPremium, setIsBuyingPremium] = useState<boolean>(false);
 
@@ -139,33 +170,48 @@ export default function UserDashboard({
     useEffect(() => {
         if (!session?.user?.id || !session.access_token) return;
         let isActive = true;
+        const userId = session.user.id;
+        const accessToken = session.access_token;
 
         const load = async () => {
             try {
                 const [rankData, premiumStatus, lotsCount] = await Promise.all([
-                    getUserRank(session.user.id),
-                    loadPremiumStatus(session.access_token).catch(() => null),
-                    computeDistinctLots(session.user.id),
+                    getUserRank(userId),
+                    loadPremiumStatus(accessToken).catch(() => null),
+                    computeDistinctLots(userId),
                 ]);
 
                 const supabase = getSupabaseBrowserClient();
                 const { count } = await supabase
                     .from("parking_reports")
                     .select("id", { count: "exact", head: true })
-                    .eq("user_id", session.user.id);
+                    .eq("user_id", userId);
 
                 if (!isActive) return;
 
-                setUserPoints(rankData?.points ?? 0);
-                setUserRank(rankData?.rank ?? null);
-                setUserReports(count ?? 0);
-                setDistinctLots(lotsCount);
+                const points = rankData?.points ?? 0;
+                const rank = rankData?.rank ?? null;
+                const reports = count ?? 0;
+                const lots = lotsCount;
+                const savedCar = Boolean(premiumStatus?.parkedCarLocation);
+
+                setUserPoints(points);
+                setUserRank(rank);
+                setUserReports(reports);
+                setDistinctLots(lots);
                 if (premiumStatus) applyPremiumStatus(premiumStatus);
+
+                writeProfileCache(userId, {
+                    points,
+                    rank,
+                    reports,
+                    distinctLots: lots,
+                    premiumExpiresAt: premiumStatus?.premiumExpiresAt ?? null,
+                    premiumMonthCostPoints: premiumStatus?.premiumMonthCostPoints ?? 60,
+                    hasSavedCar: savedCar,
+                });
             } catch {
                 if (!isActive) return;
-                setUserPoints(0);
-                setUserRank(null);
-                setUserReports(0);
             }
         };
 
@@ -388,6 +434,7 @@ export default function UserDashboard({
                 {/* Find My Car (premium only) */}
                 {isPremiumActive && (
                     <div
+                        onClick={() => { onClose(); onFindMyCar?.(); }}
                         className="flex items-center gap-3 p-3 rounded-[14px] mb-2 cursor-pointer"
                         style={{ backgroundColor: "var(--surface)", border: "1px solid var(--line)" }}
                     >
