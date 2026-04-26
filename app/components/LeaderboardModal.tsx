@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { fetchLeaderboard, getUserRank, type LeaderboardPeriod } from "../lib/leaderboard";
 
@@ -22,14 +22,29 @@ const MEDAL_COLORS: Record<number, string> = {
     3: "#cd8a5e",
 };
 
+type CacheEntry = { data: LeaderboardEntry[]; rank: { rank: number; points: number } | null };
+
 export default function LeaderboardModal({ session, onClose }: LeaderboardModalProps) {
     const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
     const [userRank, setUserRank] = useState<{ rank: number; points: number } | null>(null);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [activeTab, setActiveTab] = useState<LeaderboardPeriod>("week");
+    const cache = useRef<Partial<Record<LeaderboardPeriod, CacheEntry>>>({});
+    const scrollRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
+        scrollRef.current?.scrollTo({ top: 0 });
+
+        const cached = cache.current[activeTab];
+        if (cached) {
+            setLeaderboard(cached.data);
+            setUserRank(cached.rank);
+            setError(null);
+            setIsLoading(false);
+            return;
+        }
+
         const load = async () => {
             setIsLoading(true);
             setError(null);
@@ -38,10 +53,11 @@ export default function LeaderboardModal({ session, onClose }: LeaderboardModalP
                     fetchLeaderboard(10, activeTab),
                     session?.user?.id ? getUserRank(session.user.id, activeTab) : Promise.resolve(null),
                 ]);
+                cache.current[activeTab] = { data, rank };
                 setLeaderboard(data);
                 setUserRank(rank);
             } catch {
-                setError("Failed to load leaderboard.");
+                setError("Failed to load leaderboard. Check your connection and try again.");
             } finally {
                 setIsLoading(false);
             }
@@ -65,6 +81,7 @@ export default function LeaderboardModal({ session, onClose }: LeaderboardModalP
 
     return (
         <div
+            ref={scrollRef}
             className="fixed inset-0 z-30 overflow-auto md:hidden"
             style={{ backgroundColor: "var(--background)", color: "var(--foreground)", overscrollBehaviorY: "contain" }}
         >

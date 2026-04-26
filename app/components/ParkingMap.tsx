@@ -371,8 +371,14 @@ const getCurrentPosition = (): Promise<LatLng> =>
                     longitude: position.coords.longitude,
                 });
             },
-            () => {
-                reject(new Error("Unable to fetch current location for report submission."));
+            (err) => {
+                if (err.code === err.PERMISSION_DENIED) {
+                    reject(new Error("Location access denied. Enable it in your browser settings and try again."));
+                } else if (err.code === err.TIMEOUT) {
+                    reject(new Error("Location timed out. Make sure you have a GPS signal and try again."));
+                } else {
+                    reject(new Error("Location unavailable. Try again or move to an area with better signal."));
+                }
             },
             {
                 enableHighAccuracy: true,
@@ -664,6 +670,11 @@ export default function ParkingMap() {
         if (typeof localStorage === "undefined") return "metric";
         return (localStorage.getItem("units") as "metric" | "imperial" | null) ?? "metric";
     });
+    const [showHeatmap, setShowHeatmap] = useState<boolean>(() => {
+        if (typeof localStorage === "undefined") return true;
+        return (localStorage.getItem("heatmap") ?? "true") === "true";
+    });
+    const [isOnline, setIsOnline] = useState<boolean>(() => (typeof navigator !== "undefined" ? navigator.onLine : true));
 
     const { isNearCampus, distanceToCampus, locationError, currentLocation } = useCampusProximity();
 
@@ -826,9 +837,23 @@ export default function ParkingMap() {
             if (e.key === "units" && (e.newValue === "metric" || e.newValue === "imperial")) {
                 setDistanceUnits(e.newValue);
             }
+            if (e.key === "heatmap" && e.newValue !== null) {
+                setShowHeatmap(e.newValue === "true");
+            }
         };
         window.addEventListener("storage", handler);
         return () => window.removeEventListener("storage", handler);
+    }, []);
+
+    useEffect(() => {
+        const onOnline = () => setIsOnline(true);
+        const onOffline = () => setIsOnline(false);
+        window.addEventListener("online", onOnline);
+        window.addEventListener("offline", onOffline);
+        return () => {
+            window.removeEventListener("online", onOnline);
+            window.removeEventListener("offline", onOffline);
+        };
     }, []);
 
     const canSubmitReport = useMemo(
@@ -2015,6 +2040,13 @@ export default function ParkingMap() {
     }, [heatmapData, isMapReady, areBoundaryLayersReady, isPremiumActive]);
 
     useEffect(() => {
+        if (!isMapReady || !mapRef.current || !mapRef.current.isStyleLoaded()) return;
+        const map = mapRef.current;
+        if (!map.getLayer(REPORTS_HEATMAP_LAYER_ID)) return;
+        map.setLayoutProperty(REPORTS_HEATMAP_LAYER_ID, "visibility", showHeatmap ? "visible" : "none");
+    }, [showHeatmap, isMapReady]);
+
+    useEffect(() => {
         if (!isMapReady || !mapRef.current || !mapRef.current.isStyleLoaded()) {
             return;
         }
@@ -2044,6 +2076,19 @@ export default function ParkingMap() {
 
             {/* PointBurst overlay */}
             {showPointBurst && <PointBurst value={lastEarnedPoints} onDone={() => setShowPointBurst(false)} />}
+
+            {/* Offline banner */}
+            {!isOnline && (
+                <div
+                    className="absolute top-0 left-0 right-0 z-20 flex items-center justify-center gap-2 py-2 px-4 text-xs font-bold md:hidden"
+                    style={{ backgroundColor: "#f59e0b", color: "#fff", paddingTop: "calc(0.5rem + max(0px, env(safe-area-inset-top)))" }}
+                >
+                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                        <path d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                    </svg>
+                    You&apos;re offline — showing cached data
+                </div>
+            )}
 
             {/* Desktop notice */}
             <div className="hidden md:flex absolute inset-0 items-center justify-center z-10 pointer-events-none">

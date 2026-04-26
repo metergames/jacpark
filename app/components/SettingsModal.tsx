@@ -80,7 +80,7 @@ export default function SettingsModal({ session, onClose }: SettingsModalProps) 
     const [push, setPush] = useState(true);
     const [haptics, setHaptics] = useState(() => readLocalTime("haptics", "false") === "true");
     const [units, setUnits] = useState<"metric" | "imperial">(() => (readLocalTime("units", "metric") as "metric" | "imperial"));
-    const [heatmap, setHeatmap] = useState(true);
+    const [heatmap, setHeatmap] = useState(() => readLocalTime("heatmap", "true") === "true");
     const [quietHoursOpen, setQuietHoursOpen] = useState(false);
     const [quietStart, setQuietStart] = useState(() => readLocalTime("quiet_start", "22:00"));
     const [quietEnd, setQuietEnd] = useState(() => readLocalTime("quiet_end", "07:00"));
@@ -240,7 +240,14 @@ export default function SettingsModal({ session, onClose }: SettingsModalProps) 
                     </span>
                 </Row>
                 <Row label="Show heatmap" sub="Detailed live density" last>
-                    <Toggle on={heatmap} onChange={setHeatmap} />
+                    <Toggle
+                        on={heatmap}
+                        onChange={(v) => {
+                            setHeatmap(v);
+                            localStorage.setItem("heatmap", String(v));
+                            window.dispatchEvent(new StorageEvent("storage", { key: "heatmap", newValue: String(v) }));
+                        }}
+                    />
                 </Row>
             </Section>
 
