@@ -718,11 +718,11 @@ export default function ParkingMap() {
 
         for (const report of recentReports) {
             const reportAgeMs = Math.max(0, nowMs - Date.parse(report.createdAt));
-            if (reportAgeMs > 4 * 60 * 60 * 1000) {
+            if (reportAgeMs > 6 * 60 * 60 * 1000) {
                 continue;
             }
 
-            const recencyWeight = Math.exp(-reportAgeMs / (35 * 60 * 1000));
+            const recencyWeight = Math.exp(-reportAgeMs / (75 * 60 * 1000));
             const actionAdjustment = report.actionType === "parked" ? 0.45 : report.actionType === "leaving" ? -0.65 : 0;
             const actionReliability = report.actionType === "observing" ? 1 : 0.92;
             const adjustedFullness = clampNumber(deriveFullnessValue(report) + actionAdjustment, 1, 5);
