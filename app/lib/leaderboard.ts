@@ -77,7 +77,7 @@ export async function fetchLeaderboard(limit: number = 10, period: LeaderboardPe
             full_name: p.display_name || "Unknown User",
             points: pointsMap.get(p.id) ?? 0,
         }))
-        .sort((a, b) => b.points - a.points || 0);
+        .sort((a, b) => b.points - a.points || a.id.localeCompare(b.id));
 
     return entries.slice(0, limit).map((e, i) => ({ ...e, rank: i + 1 }));
 }
@@ -88,20 +88,28 @@ export async function getUserRank(userId: string, period: LeaderboardPeriod = "a
     if (period === "all") {
         const { data: userProfile, error: userError } = await supabase
             .from("profiles")
-            .select("points")
+            .select("points, created_at")
             .eq("id", userId)
             .single();
 
         if (userError || !userProfile) return null;
 
-        const { count, error: countError } = await supabase
-            .from("profiles")
-            .select("*", { count: "exact", head: true })
-            .gt("points", userProfile.points);
+        const [{ count: morePoints, error: e1 }, { count: tiebreak, error: e2 }] = await Promise.all([
+            supabase
+                .from("profiles")
+                .select("*", { count: "exact", head: true })
+                .gt("points", userProfile.points),
+            supabase
+                .from("profiles")
+                .select("*", { count: "exact", head: true })
+                .eq("points", userProfile.points)
+                .lt("created_at", userProfile.created_at),
+        ]);
 
-        if (countError) throw new Error(countError.message);
+        if (e1) throw new Error(e1.message);
+        if (e2) throw new Error(e2.message);
 
-        return { rank: (count || 0) + 1, points: userProfile.points || 0 };
+        return { rank: (morePoints || 0) + (tiebreak || 0) + 1, points: userProfile.points || 0 };
     }
 
     const since = periodStart(period)!;
@@ -123,12 +131,10 @@ export async function getUserRank(userId: string, period: LeaderboardPeriod = "a
     }
 
     const userPoints = pointsMap.get(userId) ?? 0;
-    if (userPoints === 0 && !pointsMap.has(userId)) return { rank: pointsMap.size + 1, points: 0 };
 
-    let rank = 1;
-    for (const [uid, pts] of pointsMap) {
-        if (uid !== userId && pts > userPoints) rank++;
-    }
+    const sorted = [...pointsMap.entries()].sort(([aId, aPts], [bId, bPts]) => bPts - aPts || aId.localeCompare(bId));
+    const userIndex = sorted.findIndex(([uid]) => uid === userId);
+    if (userIndex === -1) return { rank: sorted.length + 1, points: 0 };
 
-    return { rank, points: userPoints };
+    return { rank: userIndex + 1, points: userPoints };
 }
