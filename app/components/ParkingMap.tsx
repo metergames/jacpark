@@ -2139,7 +2139,7 @@ export default function ParkingMap() {
                             </div>
                             <div className="text-[13px] font-extrabold truncate" style={{ color: "var(--foreground)" }}>
                                 {isNearCampus
-                                    ? `${activeLotName} · ${zoneAvailability === "open" ? "Open" : zoneAvailability === "limited" ? "Limited" : "Full"}`
+                                    ? `${activeLotName ?? "Campus"} · ${zoneAvailability === "open" ? "Open" : zoneAvailability === "limited" ? "Limited" : "Full"}`
                                     : `${formatDistance(distanceToCampus, distanceUnits)} from zone`}
                             </div>
                         </div>
